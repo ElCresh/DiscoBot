@@ -28,7 +28,12 @@ player = AudioPlayer()
 
 MEDIA_DIR = Path("media")
 MEDIA_DIR.mkdir(exist_ok=True)
-AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".midi", ".mid", ".aac", ".wma"}
+MEDIA_EXTENSIONS = {
+    # Audio
+    ".mp3", ".wav", ".flac", ".ogg", ".aac", ".wma", ".midi", ".mid",
+    # Video (riprodotti solo audio)
+    ".mp4", ".mkv", ".avi", ".webm", ".mov", ".wmv", ".flv",
+}
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
@@ -162,7 +167,7 @@ def list_media():
     """List audio files in the media directory."""
     files = sorted(
         f.name for f in MEDIA_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
+        if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
     )
     return {"files": files}
 
@@ -173,7 +178,7 @@ async def upload_media(file: UploadFile = File(...)):
     filename = Path(file.filename).name  # strip any directory components
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
-    if not any(filename.lower().endswith(ext) for ext in AUDIO_EXTENSIONS):
+    if not any(filename.lower().endswith(ext) for ext in MEDIA_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Unsupported audio format")
     dest = MEDIA_DIR / filename
     total_size = 0
