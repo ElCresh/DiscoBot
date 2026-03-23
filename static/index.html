@@ -348,21 +348,20 @@
             <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
             <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
         </div>
-        <div class="add-track">
-            <input type="text" id="trackInput" placeholder="C:\Music\canzone.mp3">
+        <!-- Visibile solo quando type=youtube -->
+        <div class="add-track" id="youtubeInput" style="display:none">
+            <input type="text" id="trackInput" placeholder="https://youtube.com/watch?v=...">
             <button onclick="addTrack()">+</button>
         </div>
-    </div>
-
-    <!-- Media Library -->
-    <div class="card">
-        <h2>Libreria Media</h2>
-        <ul class="media-list" id="mediaList">
-            <li class="empty-media">Nessun file nella libreria</li>
-        </ul>
-        <div class="upload-form">
-            <input type="file" id="fileUpload" accept="audio/*">
-            <button onclick="uploadFile()">Carica</button>
+        <!-- Visibile solo quando type=local -->
+        <div id="localInput">
+            <ul class="media-list" id="mediaList">
+                <li class="empty-media">Nessun file nella libreria</li>
+            </ul>
+            <div class="upload-form">
+                <input type="file" id="fileUpload" accept="audio/*">
+                <button onclick="uploadFile()">Carica</button>
+            </div>
         </div>
     </div>
 
@@ -391,8 +390,8 @@
             trackType = type;
             document.getElementById('btnLocal').classList.toggle('active', type === 'local');
             document.getElementById('btnYoutube').classList.toggle('active', type === 'youtube');
-            document.getElementById('trackInput').placeholder =
-                type === 'local' ? 'C:\\Music\\canzone.mp3' : 'https://youtube.com/watch?v=...';
+            document.getElementById('youtubeInput').style.display = type === 'youtube' ? 'flex' : 'none';
+            document.getElementById('localInput').style.display = type === 'local' ? 'block' : 'none';
         }
 
         async function api(url, method = 'GET', body = null) {
@@ -441,9 +440,9 @@
 
         async function addTrack() {
             const input = document.getElementById('trackInput');
-            const path = input.value.trim();
-            if (!path) return;
-            await api('/queue/add', 'POST', { path, type: trackType });
+            const url = input.value.trim();
+            if (!url) return;
+            await api('/queue/add', 'POST', { path: url, type: 'youtube' });
             input.value = '';
             refreshState();
         }
