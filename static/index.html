@@ -248,6 +248,71 @@
             color: #555;
             padding: 20px;
         }
+        .history-list {
+            list-style: none;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        .history-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 6px;
+        }
+        .history-list li .track-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 10px;
+            font-size: 0.9em;
+        }
+        .history-list li .track-type {
+            font-size: 0.75em;
+            background: #0f3460;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+        .history-list li .track-time {
+            color: #666;
+            font-size: 0.75em;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+        .history-list li button {
+            background: #0f3460;
+            border: none;
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8em;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        .history-list li button:hover { background: #e94560; }
+        .empty-history {
+            text-align: center;
+            color: #555;
+            padding: 20px;
+        }
+        #clearHistoryBtn {
+            width: 100%;
+            margin-top: 10px;
+            padding: 8px;
+            border-radius: 8px;
+            border: none;
+            background: #0f3460;
+            color: #aaa;
+            cursor: pointer;
+            font-size: 0.85em;
+        }
+        #clearHistoryBtn:hover { background: #e94560; color: #fff; }
     </style>
 </head>
 <body>
@@ -307,6 +372,15 @@
         <ul class="queue-list" id="queueList">
             <li class="empty-queue">La scaletta è vuota</li>
         </ul>
+    </div>
+
+    <!-- Cronologia -->
+    <div class="card">
+        <h2>Cronologia</h2>
+        <ul class="history-list" id="historyList">
+            <li class="empty-history">Nessuna traccia nella cronologia</li>
+        </ul>
+        <button id="clearHistoryBtn" style="display:none" onclick="clearHistory()">Cancella Cronologia</button>
     </div>
 
     <script>
@@ -467,9 +541,45 @@
                         });
                     });
                 }
+                refreshHistory();
             } catch (e) {
                 console.error('Refresh failed:', e);
             }
+        }
+
+        async function refreshHistory() {
+            try {
+                const data = await api('/history');
+                const list = document.getElementById('historyList');
+                const btn = document.getElementById('clearHistoryBtn');
+                if (data.history.length === 0) {
+                    list.innerHTML = '<li class="empty-history">Nessuna traccia nella cronologia</li>';
+                    btn.style.display = 'none';
+                } else {
+                    list.innerHTML = data.history.map((e, i) =>
+                        `<li>
+                            <span class="track-type">${e.track.type === 'youtube' ? 'YT' : 'FILE'}</span>
+                            <span class="track-name">${e.track.title}</span>
+                            <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
+                            <button onclick="requeueFromHistory(${i})">+ Coda</button>
+                        </li>`
+                    ).join('');
+                    btn.style.display = 'block';
+                }
+            } catch (e) {
+                console.error('History refresh failed:', e);
+            }
+        }
+
+        async function requeueFromHistory(index) {
+            await api('/history/' + index + '/requeue', 'POST');
+            refreshState();
+        }
+
+        async function clearHistory() {
+            if (!confirm('Cancellare tutta la cronologia?')) return;
+            await api('/history', 'DELETE');
+            refreshHistory();
         }
 
         // Seek on progress bar click

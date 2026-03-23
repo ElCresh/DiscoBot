@@ -20,6 +20,11 @@ class Track(BaseModel):
     duration: float | None = None  # seconds
 
 
+class HistoryEntry(BaseModel):
+    track: Track
+    played_at: str  # ISO 8601
+
+
 class PlayerState(BaseModel):
     current_track: Track | None = None
     queue: list[Track] = []

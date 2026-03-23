@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from app.models import TrackRequest, Track, PlayerState
+from app.models import TrackRequest, Track, PlayerState, HistoryEntry
 from app.player import AudioPlayer
 
 app = FastAPI(title="DiscoBot", version="1.0.0")
@@ -128,6 +128,30 @@ def move_track(track_id: int, position: int):
 def clear_queue():
     """Clear the entire queue."""
     player.clear_queue()
+    return {"status": "cleared"}
+
+
+# --- History ---
+
+@app.get("/history")
+def get_history():
+    """Get playback history."""
+    return {"history": player.get_history()}
+
+
+@app.post("/history/{index}/requeue", response_model=Track)
+def requeue_history(index: int):
+    """Re-add a track from history to the queue."""
+    try:
+        return player.requeue_from_history(index)
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Invalid history index")
+
+
+@app.delete("/history")
+def clear_history():
+    """Clear playback history."""
+    player.clear_history()
     return {"status": "cleared"}
 
 
