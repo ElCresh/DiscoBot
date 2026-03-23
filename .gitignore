@@ -1,0 +1,17 @@
+# Uploaded media
+media/
+
+# SoundFonts (binary, user-provided)
+soundfonts/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env

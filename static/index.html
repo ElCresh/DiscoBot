@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DiscoBot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 { color: #e94560; margin-bottom: 20px; font-size: 2em; }
+        .card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 20px;
+            width: 100%;
+            max-width: 500px;
+            margin-bottom: 16px;
+        }
+        .now-playing {
+            text-align: center;
+        }
+        .now-playing .title {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #e94560;
+            min-height: 1.6em;
+        }
+        .now-playing .time {
+            color: #aaa;
+            font-size: 0.9em;
+            margin-bottom: 12px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #0f3460;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-bottom: 16px;
+        }
+        .progress-bar .fill {
+            height: 100%;
+            background: #e94560;
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .controls button {
+            background: #0f3460;
+            border: none;
+            color: #eee;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            font-size: 1.3em;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .controls button:hover { background: #e94560; }
+        .controls button.play-btn { width: 60px; height: 60px; font-size: 1.5em; }
+        .volume {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+        }
+        .volume input[type="range"] {
+            width: 150px;
+            accent-color: #e94560;
+        }
+        .volume span { font-size: 0.9em; color: #aaa; width: 35px; }
+        .add-track {
+            display: flex;
+            gap: 8px;
+        }
+        .add-track input {
+            flex: 1;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.95em;
+        }
+        .add-track input::placeholder { color: #666; }
+        .add-track button, .type-toggle button {
+            padding: 10px 16px;
+            border-radius: 8px;
+            border: none;
+            background: #e94560;
+            color: #fff;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .add-track button:hover { background: #c73650; }
+        .type-toggle {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .type-toggle button {
+            flex: 1;
+            background: #0f3460;
+        }
+        .type-toggle button.active { background: #e94560; }
+        .queue-list {
+            list-style: none;
+        }
+        .queue-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 6px;
+        }
+        .queue-list li .track-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 10px;
+        }
+        .queue-list li .track-type {
+            font-size: 0.75em;
+            background: #0f3460;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-right: 8px;
+        }
+        .queue-list li button {
+            background: none;
+            border: none;
+            color: #e94560;
+            cursor: pointer;
+            font-size: 1.1em;
+            padding: 4px;
+        }
+        .card h2 {
+            font-size: 1em;
+            color: #aaa;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .empty-queue {
+            text-align: center;
+            color: #555;
+            padding: 20px;
+        }
+        .media-list {
+            list-style: none;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        .media-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 6px;
+        }
+        .media-list li span {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 10px;
+            font-size: 0.9em;
+        }
+        .media-list li button {
+            background: #e94560;
+            border: none;
+            color: #fff;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        .media-list li button:hover { background: #c73650; }
+        .upload-form {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .upload-form input[type="file"] {
+            flex: 1;
+            font-size: 0.85em;
+            color: #aaa;
+        }
+        .upload-form button {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: none;
+            background: #e94560;
+            color: #fff;
+            cursor: pointer;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .upload-form button:hover { background: #c73650; }
+        .empty-media {
+            text-align: center;
+            color: #555;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>DiscoBot</h1>
+
+    <!-- Now Playing -->
+    <div class="card now-playing">
+        <div class="title" id="trackTitle">Nessuna traccia</div>
+        <div class="time">
+            <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
+        </div>
+        <div class="progress-bar" id="progressBar">
+            <div class="fill" id="progressFill"></div>
+        </div>
+        <div class="controls">
+            <button onclick="api('/player/previous', 'POST')">&#9198;</button>
+            <button onclick="api('/player/stop', 'POST')">&#9209;</button>
+            <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">&#9654;</button>
+            <button onclick="api('/player/skip', 'POST')">&#9197;</button>
+        </div>
+        <div class="volume">
+            <span>&#128264;</span>
+            <input type="range" id="volumeSlider" min="0" max="100" value="80"
+                   oninput="api('/player/volume?volume=' + this.value, 'POST')">
+            <span id="volumeLabel">80</span>
+        </div>
+    </div>
+
+    <!-- Add Track -->
+    <div class="card">
+        <h2>Aggiungi Traccia</h2>
+        <div class="type-toggle">
+            <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
+            <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
+        </div>
+        <div class="add-track">
+            <input type="text" id="trackInput" placeholder="C:\Music\canzone.mp3">
+            <button onclick="addTrack()">+</button>
+        </div>
+    </div>
+
+    <!-- Media Library -->
+    <div class="card">
+        <h2>Libreria Media</h2>
+        <ul class="media-list" id="mediaList">
+            <li class="empty-media">Nessun file nella libreria</li>
+        </ul>
+        <div class="upload-form">
+            <input type="file" id="fileUpload" accept="audio/*">
+            <button onclick="uploadFile()">Carica</button>
+        </div>
+    </div>
+
+    <!-- Queue -->
+    <div class="card">
+        <h2>Scaletta</h2>
+        <ul class="queue-list" id="queueList">
+            <li class="empty-queue">La scaletta è vuota</li>
+        </ul>
+    </div>
+
+    <script>
+        let trackType = 'local';
+        let isPlaying = false;
+
+        function setType(type) {
+            trackType = type;
+            document.getElementById('btnLocal').classList.toggle('active', type === 'local');
+            document.getElementById('btnYoutube').classList.toggle('active', type === 'youtube');
+            document.getElementById('trackInput').placeholder =
+                type === 'local' ? 'C:\\Music\\canzone.mp3' : 'https://youtube.com/watch?v=...';
+        }
+
+        async function api(url, method = 'GET', body = null) {
+            const opts = { method };
+            if (body) {
+                opts.headers = { 'Content-Type': 'application/json' };
+                opts.body = JSON.stringify(body);
+            }
+            const res = await fetch(url, opts);
+            return res.json();
+        }
+
+        async function refreshMedia() {
+            try {
+                const data = await api('/media/list');
+                const list = document.getElementById('mediaList');
+                if (data.files.length === 0) {
+                    list.innerHTML = '<li class="empty-media">Nessun file nella libreria</li>';
+                } else {
+                    list.innerHTML = data.files.map(f =>
+                        `<li>
+                            <span>${f}</span>
+                            <button onclick="addMediaToQueue('${f.replace(/'/g, "\\'")}')">+</button>
+                        </li>`
+                    ).join('');
+                }
+            } catch (e) {
+                console.error('Media refresh failed:', e);
+            }
+        }
+
+        async function addMediaToQueue(filename) {
+            await api('/queue/add-media/' + encodeURIComponent(filename), 'POST');
+            refreshState();
+        }
+
+        async function uploadFile() {
+            const input = document.getElementById('fileUpload');
+            if (!input.files.length) return;
+            const formData = new FormData();
+            formData.append('file', input.files[0]);
+            await fetch('/media/upload', { method: 'POST', body: formData });
+            input.value = '';
+            refreshMedia();
+        }
+
+        async function addTrack() {
+            const input = document.getElementById('trackInput');
+            const path = input.value.trim();
+            if (!path) return;
+            await api('/queue/add', 'POST', { path, type: trackType });
+            input.value = '';
+            refreshState();
+        }
+
+        async function removeTrack(id) {
+            await api('/queue/' + id, 'DELETE');
+            refreshState();
+        }
+
+        function togglePlayPause() {
+            api(isPlaying ? '/player/pause' : '/player/play', 'POST');
+        }
+
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return m + ':' + s.toString().padStart(2, '0');
+        }
+
+        async function refreshState() {
+            try {
+                const state = await api('/player/state');
+                isPlaying = state.is_playing;
+
+                // Now playing
+                const title = state.current_track ? state.current_track.title : 'Nessuna traccia';
+                document.getElementById('trackTitle').textContent = title;
+                document.getElementById('currentTime').textContent = formatTime(state.position);
+                document.getElementById('totalTime').textContent = formatTime(state.duration);
+                document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#9208;' : '&#9654;';
+
+                // Progress
+                const pct = state.duration > 0 ? (state.position / state.duration * 100) : 0;
+                document.getElementById('progressFill').style.width = pct + '%';
+
+                // Volume
+                document.getElementById('volumeSlider').value = state.volume;
+                document.getElementById('volumeLabel').textContent = state.volume;
+
+                // Queue
+                const list = document.getElementById('queueList');
+                if (state.queue.length === 0) {
+                    list.innerHTML = '<li class="empty-queue">La scaletta è vuota</li>';
+                } else {
+                    list.innerHTML = state.queue.map(t =>
+                        `<li>
+                            <span class="track-type">${t.type === 'youtube' ? 'YT' : 'FILE'}</span>
+                            <span class="track-name">${t.title}</span>
+                            <button onclick="removeTrack(${t.id})">&#10005;</button>
+                        </li>`
+                    ).join('');
+                }
+            } catch (e) {
+                console.error('Refresh failed:', e);
+            }
+        }
+
+        // Seek on progress bar click
+        document.getElementById('progressBar').addEventListener('click', async (e) => {
+            const bar = e.currentTarget;
+            const pct = e.offsetX / bar.offsetWidth;
+            const state = await api('/player/state');
+            if (state.duration > 0) {
+                api('/player/seek?position=' + (pct * state.duration), 'POST');
+            }
+        });
+
+        // Allow Enter key to add track
+        document.getElementById('trackInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') addTrack();
+        });
+
+        // Poll state every second
+        setInterval(refreshState, 1000);
+        refreshState();
+        refreshMedia();
+    </script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+python-vlc>=3.0.20
+fastapi>=0.115.0
+uvicorn>=0.32.0
+yt-dlp>=2026.3.0
+pytubefix>=8.0.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+midi2audio>=0.1.1

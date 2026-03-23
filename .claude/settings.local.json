@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:news.ycombinator.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(python:*)"
+    ]
+  }
+}
