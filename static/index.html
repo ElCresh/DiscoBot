@@ -37,9 +37,15 @@
         .now-playing .title {
             font-size: 1.3em;
             font-weight: bold;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
             color: #e94560;
             min-height: 1.6em;
+        }
+        .now-playing .artist-info {
+            color: #aaa;
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            min-height: 1.2em;
         }
         .now-playing .time {
             color: #aaa;
@@ -64,22 +70,25 @@
         .controls {
             display: flex;
             justify-content: center;
-            gap: 12px;
+            align-items: center;
+            gap: 8px;
             margin-bottom: 16px;
         }
         .controls button {
             background: #0f3460;
             border: none;
             color: #eee;
-            width: 50px;
-            height: 50px;
+            width: 44px;
+            height: 44px;
             border-radius: 50%;
-            font-size: 1.3em;
+            font-size: 1.1em;
             cursor: pointer;
             transition: background 0.2s;
         }
         .controls button:hover { background: #e94560; }
-        .controls button.play-btn { width: 60px; height: 60px; font-size: 1.5em; }
+        .controls button.play-btn { width: 56px; height: 56px; font-size: 1.4em; }
+        .controls button.active { background: #e94560; }
+        .controls button.mode-btn { width: 38px; height: 38px; font-size: 0.85em; }
         .volume {
             display: flex;
             align-items: center;
@@ -143,6 +152,10 @@
             text-overflow: ellipsis;
             white-space: nowrap;
             margin-right: 10px;
+        }
+        .queue-list li .track-artist {
+            font-size: 0.8em;
+            color: #888;
         }
         .queue-list li .track-type {
             font-size: 0.75em;
@@ -320,6 +333,92 @@
         }
         #clearHistoryBtn:hover { background: #e94560; color: #fff; }
 
+        /* Playlist styles */
+        .playlist-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .playlist-controls input {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #eee;
+            font-size: 0.9em;
+        }
+        .playlist-controls input::placeholder { color: #666; }
+        .playlist-controls button {
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: none;
+            background: #e94560;
+            color: #fff;
+            cursor: pointer;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .playlist-controls button:hover { background: #c73650; }
+        .playlist-list {
+            list-style: none;
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        .playlist-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 6px;
+        }
+        .playlist-list li .pl-info {
+            flex: 1;
+            overflow: hidden;
+            margin-right: 8px;
+        }
+        .playlist-list li .pl-name {
+            font-size: 0.95em;
+            font-weight: bold;
+        }
+        .playlist-list li .pl-count {
+            font-size: 0.75em;
+            color: #888;
+        }
+        .playlist-list li .pl-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .playlist-list li .pl-actions button {
+            background: #0f3460;
+            border: none;
+            color: #fff;
+            padding: 4px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .playlist-list li .pl-actions button:hover { background: #e94560; }
+        .playlist-list li .pl-actions button.del-btn { color: #e94560; background: none; }
+        .playlist-list li .pl-actions button.del-btn:hover { color: #fff; background: #e94560; }
+        .empty-playlist {
+            text-align: center;
+            color: #555;
+            padding: 20px;
+        }
+
+        /* WS status dot */
+        .ws-status {
+            width: 8px; height: 8px; border-radius: 50%;
+            display: inline-block; margin-left: 8px;
+            background: #555; vertical-align: middle;
+        }
+        .ws-status.connected { background: #4caf50; }
+
         /* Desktop: layout a 3 colonne */
         @media (min-width: 1024px) {
             body { align-items: stretch; }
@@ -342,13 +441,14 @@
     </style>
 </head>
 <body>
-    <h1>DiscoBot</h1>
+    <h1>DiscoBot <span class="ws-status" id="wsStatus" title="WebSocket"></span></h1>
 
     <div class="layout">
         <!-- Colonna centrale: Now Playing + Aggiungi Traccia -->
         <div class="col-center">
             <div class="card now-playing">
                 <div class="title" id="trackTitle">Nessuna traccia</div>
+                <div class="artist-info" id="artistInfo"></div>
                 <div class="time">
                     <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
                 </div>
@@ -356,10 +456,12 @@
                     <div class="fill" id="progressFill"></div>
                 </div>
                 <div class="controls">
+                    <button class="mode-btn" id="shuffleBtn" onclick="toggleShuffle()" title="Shuffle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>
                     <button onclick="api('/player/previous', 'POST')">&#9198;</button>
                     <button onclick="api('/player/stop', 'POST')">&#9209;</button>
                     <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">&#9654;</button>
                     <button onclick="api('/player/skip', 'POST')">&#9197;</button>
+                    <button class="mode-btn" id="repeatBtn" onclick="cycleRepeat()" title="Repeat"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
                 </div>
                 <div class="volume">
                     <span>&#128264;</span>
@@ -402,6 +504,18 @@
                     </ul>
                 </div>
             </div>
+
+            <!-- Playlist card -->
+            <div class="card">
+                <h2>Playlist</h2>
+                <div class="playlist-controls">
+                    <input type="text" id="playlistNameInput" placeholder="Nome playlist...">
+                    <button onclick="savePlaylist()">Salva</button>
+                </div>
+                <ul class="playlist-list" id="playlistList">
+                    <li class="empty-playlist">Nessuna playlist salvata</li>
+                </ul>
+            </div>
         </div>
 
         <!-- Colonna destra: Scaletta -->
@@ -414,7 +528,7 @@
             </div>
         </div>
 
-        <!-- Colonna sinistra: Cronologia (ultima in HTML per mobile, riposizionata via CSS su desktop) -->
+        <!-- Colonna sinistra: Cronologia -->
         <div class="col-left">
             <div class="card">
                 <h2>Cronologia</h2>
@@ -429,6 +543,96 @@
     <script>
         let trackType = 'local';
         let isPlaying = false;
+        let currentShuffle = false;
+        let currentRepeat = 'off';
+        let ws = null;
+        let wsReconnectTimer = null;
+
+        // --- WebSocket ---
+        function connectWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${location.host}/ws`);
+            ws.onopen = () => {
+                document.getElementById('wsStatus').classList.add('connected');
+                if (wsReconnectTimer) { clearInterval(wsReconnectTimer); wsReconnectTimer = null; }
+            };
+            ws.onmessage = (event) => {
+                const state = JSON.parse(event.data);
+                applyState(state);
+            };
+            ws.onclose = () => {
+                document.getElementById('wsStatus').classList.remove('connected');
+                if (!wsReconnectTimer) {
+                    wsReconnectTimer = setInterval(() => {
+                        if (!ws || ws.readyState === WebSocket.CLOSED) connectWebSocket();
+                    }, 3000);
+                }
+            };
+            ws.onerror = () => ws.close();
+        }
+
+        // Fallback polling for position updates (WS doesn't push these continuously)
+        setInterval(async () => {
+            try {
+                const state = await api('/player/state');
+                // Only update time-sensitive fields, not the full UI
+                document.getElementById('currentTime').textContent = formatTime(state.position);
+                document.getElementById('totalTime').textContent = formatTime(state.duration);
+                const pct = state.duration > 0 ? (state.position / state.duration * 100) : 0;
+                document.getElementById('progressFill').style.width = pct + '%';
+                isPlaying = state.is_playing;
+                document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#9208;' : '&#9654;';
+            } catch (e) {}
+        }, 1000);
+
+        function applyState(state) {
+            isPlaying = state.is_playing;
+
+            // Now playing
+            const track = state.current_track;
+            const title = track ? track.title : 'Nessuna traccia';
+            document.getElementById('trackTitle').textContent = title;
+
+            // Artist / album info
+            const artistEl = document.getElementById('artistInfo');
+            if (track && (track.artist || track.album)) {
+                const parts = [];
+                if (track.artist) parts.push(track.artist);
+                if (track.album) parts.push(track.album);
+                artistEl.textContent = parts.join(' — ');
+            } else {
+                artistEl.textContent = '';
+            }
+
+            document.getElementById('currentTime').textContent = formatTime(state.position);
+            document.getElementById('totalTime').textContent = formatTime(state.duration);
+            document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#9208;' : '&#9654;';
+
+            // Progress
+            const pct = state.duration > 0 ? (state.position / state.duration * 100) : 0;
+            document.getElementById('progressFill').style.width = pct + '%';
+
+            // Volume
+            document.getElementById('volumeSlider').value = state.volume;
+            document.getElementById('volumeLabel').textContent = state.volume;
+
+            // Shuffle & Repeat
+            currentShuffle = state.shuffle;
+            currentRepeat = state.repeat;
+            document.getElementById('shuffleBtn').classList.toggle('active', currentShuffle);
+            const repeatBtn = document.getElementById('repeatBtn');
+            repeatBtn.classList.toggle('active', currentRepeat !== 'off');
+            const repeatSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>';
+            if (currentRepeat === 'one') {
+                repeatBtn.innerHTML = repeatSvg + '<small style="font-size:0.6em;margin-left:-2px;">1</small>';
+            } else {
+                repeatBtn.innerHTML = repeatSvg;
+            }
+
+            // Queue
+            renderQueue(state.queue);
+            refreshHistory();
+        }
 
         function setType(type) {
             trackType = type;
@@ -471,7 +675,6 @@
 
         async function addMediaToQueue(filename) {
             await api('/queue/add-media/' + encodeURIComponent(filename), 'POST');
-            refreshState();
         }
 
         async function uploadFile() {
@@ -490,7 +693,6 @@
             if (!url) return;
             await api('/queue/add', 'POST', { path: url, type: 'youtube' });
             input.value = '';
-            refreshState();
         }
 
         async function searchSpotify() {
@@ -518,17 +720,14 @@
 
         async function addSpotifyTrack(spotifyId) {
             await api('/queue/add', 'POST', { path: spotifyId, type: 'spotify' });
-            refreshState();
         }
 
         async function removeTrack(id) {
             await api('/queue/' + id, 'DELETE');
-            refreshState();
         }
 
         async function moveTrack(id, position) {
             await api('/queue/' + id + '/move?position=' + position, 'POST');
-            refreshState();
         }
 
         let draggedTrackId = null;
@@ -537,87 +736,74 @@
             api(isPlaying ? '/player/pause' : '/player/play', 'POST');
         }
 
+        function toggleShuffle() {
+            api('/player/shuffle?enabled=' + (!currentShuffle), 'POST');
+        }
+
+        function cycleRepeat() {
+            const modes = ['off', 'one', 'all'];
+            const next = modes[(modes.indexOf(currentRepeat) + 1) % modes.length];
+            api('/player/repeat?mode=' + next, 'POST');
+        }
+
         function formatTime(seconds) {
             const m = Math.floor(seconds / 60);
             const s = Math.floor(seconds % 60);
             return m + ':' + s.toString().padStart(2, '0');
         }
 
-        async function refreshState() {
-            try {
-                const state = await api('/player/state');
-                isPlaying = state.is_playing;
-
-                // Now playing
-                const title = state.current_track ? state.current_track.title : 'Nessuna traccia';
-                document.getElementById('trackTitle').textContent = title;
-                document.getElementById('currentTime').textContent = formatTime(state.position);
-                document.getElementById('totalTime').textContent = formatTime(state.duration);
-                document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#9208;' : '&#9654;';
-
-                // Progress
-                const pct = state.duration > 0 ? (state.position / state.duration * 100) : 0;
-                document.getElementById('progressFill').style.width = pct + '%';
-
-                // Volume
-                document.getElementById('volumeSlider').value = state.volume;
-                document.getElementById('volumeLabel').textContent = state.volume;
-
-                // Queue
-                const list = document.getElementById('queueList');
-                if (state.queue.length === 0) {
-                    list.innerHTML = '<li class="empty-queue">La scaletta è vuota</li>';
-                } else {
-                    const len = state.queue.length;
-                    list.innerHTML = state.queue.map((t, i) =>
-                        `<li draggable="true" data-track-id="${t.id}" data-index="${i}">
-                            <span class="drag-handle">&#10303;</span>
-                            <span class="track-type">${t.type === 'youtube' ? 'YT' : t.type === 'spotify' ? 'SP' : 'FILE'}</span>
-                            <span class="track-name">${t.title}</span>
-                            ${i > 0 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i - 1})">&#8593;</button>` : ''}
-                            ${i < len - 1 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i + 1})">&#8595;</button>` : ''}
-                            <button onclick="removeTrack(${t.id})">&#10005;</button>
-                        </li>`
-                    ).join('');
-
-                    // Attach drag & drop events
-                    list.querySelectorAll('li[draggable]').forEach(li => {
-                        li.addEventListener('dragstart', (e) => {
-                            draggedTrackId = li.dataset.trackId;
-                            li.classList.add('dragging');
-                            e.dataTransfer.effectAllowed = 'move';
-                            e.dataTransfer.setData('text/plain', li.dataset.trackId);
-                        });
-                        li.addEventListener('dragend', () => {
-                            li.classList.remove('dragging');
-                            list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-                            draggedTrackId = null;
-                        });
-                        li.addEventListener('dragover', (e) => {
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = 'move';
-                            if (li.dataset.trackId !== draggedTrackId) {
-                                li.classList.add('drag-over');
-                            }
-                        });
-                        li.addEventListener('dragleave', () => {
-                            li.classList.remove('drag-over');
-                        });
-                        li.addEventListener('drop', (e) => {
-                            e.preventDefault();
-                            li.classList.remove('drag-over');
-                            const targetIndex = parseInt(li.dataset.index);
-                            const srcId = e.dataTransfer.getData('text/plain');
-                            if (srcId && li.dataset.trackId !== srcId) {
-                                moveTrack(srcId, targetIndex);
-                            }
-                        });
-                    });
-                }
-                refreshHistory();
-            } catch (e) {
-                console.error('Refresh failed:', e);
+        function renderQueue(queue) {
+            const list = document.getElementById('queueList');
+            if (queue.length === 0) {
+                list.innerHTML = '<li class="empty-queue">La scaletta è vuota</li>';
+                return;
             }
+            const len = queue.length;
+            list.innerHTML = queue.map((t, i) => {
+                const artistPart = t.artist ? `<span class="track-artist">${t.artist}</span>` : '';
+                return `<li draggable="true" data-track-id="${t.id}" data-index="${i}">
+                    <span class="drag-handle">&#10303;</span>
+                    <span class="track-type">${t.type === 'youtube' ? 'YT' : t.type === 'spotify' ? 'SP' : 'FILE'}</span>
+                    <span class="track-name">${t.title}${artistPart ? '<br>' + artistPart : ''}</span>
+                    ${i > 0 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i - 1})">&#8593;</button>` : ''}
+                    ${i < len - 1 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i + 1})">&#8595;</button>` : ''}
+                    <button onclick="removeTrack(${t.id})">&#10005;</button>
+                </li>`;
+            }).join('');
+
+            // Attach drag & drop events
+            list.querySelectorAll('li[draggable]').forEach(li => {
+                li.addEventListener('dragstart', (e) => {
+                    draggedTrackId = li.dataset.trackId;
+                    li.classList.add('dragging');
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', li.dataset.trackId);
+                });
+                li.addEventListener('dragend', () => {
+                    li.classList.remove('dragging');
+                    list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                    draggedTrackId = null;
+                });
+                li.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (li.dataset.trackId !== draggedTrackId) {
+                        li.classList.add('drag-over');
+                    }
+                });
+                li.addEventListener('dragleave', () => {
+                    li.classList.remove('drag-over');
+                });
+                li.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    li.classList.remove('drag-over');
+                    const targetIndex = parseInt(li.dataset.index);
+                    const srcId = e.dataTransfer.getData('text/plain');
+                    if (srcId && li.dataset.trackId !== srcId) {
+                        moveTrack(srcId, targetIndex);
+                    }
+                });
+            });
         }
 
         async function refreshHistory() {
@@ -647,7 +833,6 @@
 
         async function requeueFromHistory(index) {
             await api('/history/' + index + '/requeue', 'POST');
-            refreshState();
         }
 
         async function removeHistoryEntry(index) {
@@ -659,6 +844,52 @@
             if (!confirm('Cancellare tutta la cronologia?')) return;
             await api('/history', 'DELETE');
             refreshHistory();
+        }
+
+        // --- Playlists ---
+        async function refreshPlaylists() {
+            try {
+                const data = await api('/playlists');
+                const list = document.getElementById('playlistList');
+                if (data.playlists.length === 0) {
+                    list.innerHTML = '<li class="empty-playlist">Nessuna playlist salvata</li>';
+                } else {
+                    list.innerHTML = data.playlists.map(p =>
+                        `<li>
+                            <div class="pl-info">
+                                <div class="pl-name">${p.name}</div>
+                                <div class="pl-count">${p.track_count} brani</div>
+                            </div>
+                            <div class="pl-actions">
+                                <button onclick="loadPlaylist('${p.name.replace(/'/g, "\\'")}', false)" title="Accoda">+ Coda</button>
+                                <button onclick="loadPlaylist('${p.name.replace(/'/g, "\\'")}', true)" title="Sostituisci">&#9654;</button>
+                                <button class="del-btn" onclick="deletePlaylist('${p.name.replace(/'/g, "\\'")}')">&#10005;</button>
+                            </div>
+                        </li>`
+                    ).join('');
+                }
+            } catch (e) {
+                console.error('Playlist refresh failed:', e);
+            }
+        }
+
+        async function savePlaylist() {
+            const input = document.getElementById('playlistNameInput');
+            const name = input.value.trim();
+            if (!name) return;
+            await api('/playlists/save?name=' + encodeURIComponent(name), 'POST');
+            input.value = '';
+            refreshPlaylists();
+        }
+
+        async function loadPlaylist(name, replace) {
+            await api('/playlists/' + encodeURIComponent(name) + '/load?replace=' + replace, 'POST');
+        }
+
+        async function deletePlaylist(name) {
+            if (!confirm(`Eliminare la playlist "${name}"?`)) return;
+            await api('/playlists/' + encodeURIComponent(name), 'DELETE');
+            refreshPlaylists();
         }
 
         // Seek on progress bar click
@@ -681,6 +912,11 @@
             if (e.key === 'Enter') searchSpotify();
         });
 
+        // Enter key for playlist save
+        document.getElementById('playlistNameInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') savePlaylist();
+        });
+
         // Check if Spotify is configured and show button
         api('/spotify/status').then(data => {
             if (data.configured) {
@@ -688,10 +924,10 @@
             }
         });
 
-        // Poll state every second
-        setInterval(refreshState, 1000);
-        refreshState();
+        // Init
+        connectWebSocket();
         refreshMedia();
+        refreshPlaylists();
     </script>
 </body>
 </html>

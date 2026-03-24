@@ -1,17 +1,18 @@
 """REST API routes for remote control."""
 
+import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.models import TrackRequest, Track, PlayerState, HistoryEntry
-from app.player import AudioPlayer
+from app.models import TrackRequest, Track, PlayerState, HistoryEntry, RepeatMode
+from app.player import AudioPlayer, ws_manager
 
-app = FastAPI(title="DiscoBot", version="1.0.0")
+app = FastAPI(title="DiscoBot", version="2.0.0")
 
 cors_origins = settings.cors_origins.split(",")
 app.add_middleware(
@@ -32,6 +33,26 @@ MEDIA_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".webm", ".mov", ".wmv", ".flv",
 }
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+# --- WebSocket ---
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    """WebSocket endpoint for real-time state updates."""
+    await ws.accept()
+    queue = ws_manager.subscribe()
+    try:
+        # Send initial state
+        state = player.get_state()
+        await ws.send_json(state.model_dump())
+        while True:
+            data = await queue.get()
+            await ws.send_json(data)
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        ws_manager.unsubscribe(queue)
 
 
 # --- Player controls ---
@@ -87,6 +108,20 @@ def seek(position: float):
         raise HTTPException(status_code=400, detail="Position must be >= 0")
     player.seek(position)
     return {"position": position}
+
+
+@app.post("/player/shuffle")
+def set_shuffle(enabled: bool):
+    """Toggle shuffle mode."""
+    player.set_shuffle(enabled)
+    return {"shuffle": enabled}
+
+
+@app.post("/player/repeat")
+def set_repeat(mode: RepeatMode):
+    """Set repeat mode (off, one, all)."""
+    player.set_repeat(mode)
+    return {"repeat": mode}
 
 
 @app.get("/player/state", response_model=PlayerState)
@@ -214,6 +249,53 @@ def add_media_to_queue(filename: str):
         return player.add_track(str(filepath), "local")
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Playlists ---
+
+@app.get("/playlists")
+def list_playlists():
+    """List all saved playlists."""
+    return {"playlists": player.list_playlists()}
+
+
+@app.post("/playlists/save")
+def save_playlist(name: str):
+    """Save current queue as a named playlist."""
+    try:
+        count = player.save_playlist(name)
+        return {"name": name, "track_count": count}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/playlists/{name}/load")
+def load_playlist(name: str, replace: bool = False):
+    """Load a playlist into the queue."""
+    try:
+        count = player.load_playlist(name, replace=replace)
+        return {"name": name, "tracks_added": count}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+
+@app.get("/playlists/{name}")
+def get_playlist(name: str):
+    """Get playlist details."""
+    try:
+        return player.get_playlist(name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+
+
+@app.delete("/playlists/{name}")
+def delete_playlist(name: str):
+    """Delete a saved playlist."""
+    try:
+        player.delete_playlist(name)
+        return {"status": "deleted"}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Playlist not found")
 
 
 # --- Spotify ---

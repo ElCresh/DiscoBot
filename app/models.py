@@ -8,6 +8,12 @@ class TrackType(str, Enum):
     SPOTIFY = "spotify"
 
 
+class RepeatMode(str, Enum):
+    OFF = "off"
+    ONE = "one"
+    ALL = "all"
+
+
 class TrackRequest(BaseModel):
     path: str  # file path or YouTube URL
     type: TrackType = TrackType.LOCAL
@@ -19,6 +25,8 @@ class Track(BaseModel):
     title: str
     type: TrackType
     duration: float | None = None  # seconds
+    artist: str | None = None
+    album: str | None = None
 
 
 class HistoryEntry(BaseModel):
@@ -35,6 +43,16 @@ class SpotifySearchResult(BaseModel):
     album_art_url: str | None = None
 
 
+class PlaylistInfo(BaseModel):
+    name: str
+    track_count: int
+
+
+class PlaylistDetail(BaseModel):
+    name: str
+    tracks: list[Track]
+
+
 class PlayerState(BaseModel):
     current_track: Track | None = None
     queue: list[Track] = []
@@ -42,3 +60,5 @@ class PlayerState(BaseModel):
     volume: int = 80  # 0-100
     position: float = 0.0  # seconds
     duration: float = 0.0  # seconds
+    shuffle: bool = False
+    repeat: RepeatMode = RepeatMode.OFF
