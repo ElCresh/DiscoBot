@@ -150,6 +150,16 @@ def requeue_history(index: int):
         raise HTTPException(status_code=404, detail="Invalid history index")
 
 
+@app.delete("/history/{index}")
+def remove_history_entry(index: int):
+    """Remove a single entry from playback history."""
+    try:
+        player.remove_history_entry(index)
+        return {"status": "removed"}
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Invalid history index")
+
+
 @app.delete("/history")
 def clear_history():
     """Clear playback history."""

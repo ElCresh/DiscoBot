@@ -339,6 +339,14 @@ class AudioPlayer:
         with self._lock:
             return [HistoryEntry(**e) for e in self._history]
 
+    def remove_history_entry(self, index: int):
+        """Remove a single entry from playback history."""
+        with self._lock:
+            if index < 0 or index >= len(self._history):
+                raise IndexError("Invalid history index")
+            self._history.pop(index)
+            self._save_state()
+
     def clear_history(self):
         """Clear playback history."""
         with self._lock:

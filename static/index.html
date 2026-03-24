@@ -17,12 +17,18 @@
             padding: 20px;
         }
         h1 { color: #e94560; margin-bottom: 20px; font-size: 2em; }
+        .layout {
+            width: 100%;
+            max-width: 500px;
+        }
+        .col-left, .col-center, .col-right {
+            width: 100%;
+        }
         .card {
             background: #16213e;
             border-radius: 12px;
             padding: 20px;
             width: 100%;
-            max-width: 500px;
             margin-bottom: 16px;
         }
         .now-playing {
@@ -313,84 +319,111 @@
             font-size: 0.85em;
         }
         #clearHistoryBtn:hover { background: #e94560; color: #fff; }
+
+        /* Desktop: layout a 3 colonne */
+        @media (min-width: 1024px) {
+            body { align-items: stretch; }
+            .layout {
+                display: grid;
+                grid-template-columns: 1fr 1.2fr 1fr;
+                gap: 20px;
+                max-width: 1400px;
+                width: 100%;
+                align-items: start;
+                margin: 0 auto;
+            }
+            .col-left { order: 1; }
+            .col-center { order: 2; }
+            .col-right { order: 3; }
+            .card { max-width: none; }
+            .history-list { max-height: 70vh; }
+            .queue-list { max-height: 70vh; overflow-y: auto; }
+        }
     </style>
 </head>
 <body>
     <h1>DiscoBot</h1>
 
-    <!-- Now Playing -->
-    <div class="card now-playing">
-        <div class="title" id="trackTitle">Nessuna traccia</div>
-        <div class="time">
-            <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
-        </div>
-        <div class="progress-bar" id="progressBar">
-            <div class="fill" id="progressFill"></div>
-        </div>
-        <div class="controls">
-            <button onclick="api('/player/previous', 'POST')">&#9198;</button>
-            <button onclick="api('/player/stop', 'POST')">&#9209;</button>
-            <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">&#9654;</button>
-            <button onclick="api('/player/skip', 'POST')">&#9197;</button>
-        </div>
-        <div class="volume">
-            <span>&#128264;</span>
-            <input type="range" id="volumeSlider" min="0" max="100" value="80"
-                   oninput="api('/player/volume?volume=' + this.value, 'POST')">
-            <span id="volumeLabel">80</span>
-        </div>
-    </div>
+    <div class="layout">
+        <!-- Colonna centrale: Now Playing + Aggiungi Traccia -->
+        <div class="col-center">
+            <div class="card now-playing">
+                <div class="title" id="trackTitle">Nessuna traccia</div>
+                <div class="time">
+                    <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
+                </div>
+                <div class="progress-bar" id="progressBar">
+                    <div class="fill" id="progressFill"></div>
+                </div>
+                <div class="controls">
+                    <button onclick="api('/player/previous', 'POST')">&#9198;</button>
+                    <button onclick="api('/player/stop', 'POST')">&#9209;</button>
+                    <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">&#9654;</button>
+                    <button onclick="api('/player/skip', 'POST')">&#9197;</button>
+                </div>
+                <div class="volume">
+                    <span>&#128264;</span>
+                    <input type="range" id="volumeSlider" min="0" max="100" value="80"
+                           oninput="api('/player/volume?volume=' + this.value, 'POST')">
+                    <span id="volumeLabel">80</span>
+                </div>
+            </div>
 
-    <!-- Add Track -->
-    <div class="card">
-        <h2>Aggiungi Traccia</h2>
-        <div class="type-toggle">
-            <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
-            <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
-            <button id="btnSpotify" onclick="setType('spotify')" style="display:none">Spotify</button>
-        </div>
-        <!-- Visibile solo quando type=youtube -->
-        <div class="add-track" id="youtubeInput" style="display:none">
-            <input type="text" id="trackInput" placeholder="https://youtube.com/watch?v=...">
-            <button onclick="addTrack()">+</button>
-        </div>
-        <!-- Visibile solo quando type=local -->
-        <div id="localInput">
-            <ul class="media-list" id="mediaList">
-                <li class="empty-media">Nessun file nella libreria</li>
-            </ul>
-            <div class="upload-form">
-                <input type="file" id="fileUpload" accept="audio/*,video/*">
-                <button onclick="uploadFile()">Carica</button>
+            <div class="card">
+                <h2>Aggiungi Traccia</h2>
+                <div class="type-toggle">
+                    <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
+                    <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
+                    <button id="btnSpotify" onclick="setType('spotify')" style="display:none">Spotify</button>
+                </div>
+                <!-- Visibile solo quando type=youtube -->
+                <div class="add-track" id="youtubeInput" style="display:none">
+                    <input type="text" id="trackInput" placeholder="https://youtube.com/watch?v=...">
+                    <button onclick="addTrack()">+</button>
+                </div>
+                <!-- Visibile solo quando type=local -->
+                <div id="localInput">
+                    <ul class="media-list" id="mediaList">
+                        <li class="empty-media">Nessun file nella libreria</li>
+                    </ul>
+                    <div class="upload-form">
+                        <input type="file" id="fileUpload" accept="audio/*,video/*">
+                        <button onclick="uploadFile()">Carica</button>
+                    </div>
+                </div>
+                <!-- Visibile solo quando type=spotify -->
+                <div id="spotifyInput" style="display:none">
+                    <div class="add-track">
+                        <input type="text" id="spotifySearchInput" placeholder="Cerca su Spotify...">
+                        <button onclick="searchSpotify()">Cerca</button>
+                    </div>
+                    <ul class="media-list" id="spotifyResults">
+                        <li class="empty-media">Cerca un brano su Spotify</li>
+                    </ul>
+                </div>
             </div>
         </div>
-        <!-- Visibile solo quando type=spotify -->
-        <div id="spotifyInput" style="display:none">
-            <div class="add-track">
-                <input type="text" id="spotifySearchInput" placeholder="Cerca su Spotify...">
-                <button onclick="searchSpotify()">Cerca</button>
+
+        <!-- Colonna destra: Scaletta -->
+        <div class="col-right">
+            <div class="card">
+                <h2>Scaletta</h2>
+                <ul class="queue-list" id="queueList">
+                    <li class="empty-queue">La scaletta è vuota</li>
+                </ul>
             </div>
-            <ul class="media-list" id="spotifyResults">
-                <li class="empty-media">Cerca un brano su Spotify</li>
-            </ul>
         </div>
-    </div>
 
-    <!-- Queue -->
-    <div class="card">
-        <h2>Scaletta</h2>
-        <ul class="queue-list" id="queueList">
-            <li class="empty-queue">La scaletta è vuota</li>
-        </ul>
-    </div>
-
-    <!-- Cronologia -->
-    <div class="card">
-        <h2>Cronologia</h2>
-        <ul class="history-list" id="historyList">
-            <li class="empty-history">Nessuna traccia nella cronologia</li>
-        </ul>
-        <button id="clearHistoryBtn" style="display:none" onclick="clearHistory()">Cancella Cronologia</button>
+        <!-- Colonna sinistra: Cronologia (ultima in HTML per mobile, riposizionata via CSS su desktop) -->
+        <div class="col-left">
+            <div class="card">
+                <h2>Cronologia</h2>
+                <ul class="history-list" id="historyList">
+                    <li class="empty-history">Nessuna traccia nella cronologia</li>
+                </ul>
+                <button id="clearHistoryBtn" style="display:none" onclick="clearHistory()">Cancella Cronologia</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -602,6 +635,7 @@
                             <span class="track-name">${e.track.title}</span>
                             <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
                             <button onclick="requeueFromHistory(${i})">+ Coda</button>
+                            <button onclick="removeHistoryEntry(${i})" style="background:none;color:#e94560;padding:4px;">&#10005;</button>
                         </li>`
                     ).join('');
                     btn.style.display = 'block';
@@ -614,6 +648,11 @@
         async function requeueFromHistory(index) {
             await api('/history/' + index + '/requeue', 'POST');
             refreshState();
+        }
+
+        async function removeHistoryEntry(index) {
+            await api('/history/' + index, 'DELETE');
+            refreshHistory();
         }
 
         async function clearHistory() {
