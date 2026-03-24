@@ -6,6 +6,7 @@ class TrackType(str, Enum):
     LOCAL = "local"
     YOUTUBE = "youtube"
     SPOTIFY = "spotify"
+    SOUNDCLOUD = "soundcloud"
 
 
 class RepeatMode(str, Enum):

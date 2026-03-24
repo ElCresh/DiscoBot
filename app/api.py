@@ -298,6 +298,22 @@ def delete_playlist(name: str):
         raise HTTPException(status_code=404, detail="Playlist not found")
 
 
+# --- SoundCloud ---
+
+@app.get("/soundcloud/search")
+def soundcloud_search(q: str, limit: int = 10):
+    """Search SoundCloud for tracks."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query is required")
+    from app.soundcloud import search_soundcloud
+
+    try:
+        results = search_soundcloud(q, min(limit, 50))
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 # --- Spotify ---
 
 @app.get("/spotify/status")

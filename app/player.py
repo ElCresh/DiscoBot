@@ -288,6 +288,10 @@ class AudioPlayer:
             search_query, display_title, duration = build_youtube_search_query(path)
             audio_url, _, yt_duration = search_youtube_audio(search_query)
             return audio_url, display_title, duration or yt_duration
+        elif track_type == TrackType.SOUNDCLOUD:
+            from app.soundcloud import extract_audio_url as sc_extract
+
+            return sc_extract(path)
         else:
             p = Path(path)
             if not p.exists():
@@ -333,6 +337,10 @@ class AudioPlayer:
             from app.spotify import extract_spotify_metadata
 
             title, duration = extract_spotify_metadata(path)
+        elif track_type == TrackType.SOUNDCLOUD:
+            from app.soundcloud import extract_soundcloud_metadata
+
+            title, duration = extract_soundcloud_metadata(path)
         else:
             title, artist, album = _read_local_metadata(path)
             duration = None

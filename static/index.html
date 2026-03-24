@@ -477,6 +477,7 @@
                     <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
                     <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
                     <button id="btnSpotify" onclick="setType('spotify')" style="display:none">Spotify</button>
+                    <button id="btnSoundcloud" onclick="setType('soundcloud')">SoundCloud</button>
                 </div>
                 <!-- Visibile solo quando type=youtube -->
                 <div class="add-track" id="youtubeInput" style="display:none">
@@ -501,6 +502,16 @@
                     </div>
                     <ul class="media-list" id="spotifyResults">
                         <li class="empty-media">Cerca un brano su Spotify</li>
+                    </ul>
+                </div>
+                <!-- Visibile solo quando type=soundcloud -->
+                <div id="soundcloudInput" style="display:none">
+                    <div class="add-track">
+                        <input type="text" id="soundcloudSearchInput" placeholder="Cerca su SoundCloud...">
+                        <button onclick="searchSoundCloud()">Cerca</button>
+                    </div>
+                    <ul class="media-list" id="soundcloudResults">
+                        <li class="empty-media">Cerca un brano su SoundCloud</li>
                     </ul>
                 </div>
             </div>
@@ -639,9 +650,11 @@
             document.getElementById('btnLocal').classList.toggle('active', type === 'local');
             document.getElementById('btnYoutube').classList.toggle('active', type === 'youtube');
             document.getElementById('btnSpotify').classList.toggle('active', type === 'spotify');
+            document.getElementById('btnSoundcloud').classList.toggle('active', type === 'soundcloud');
             document.getElementById('youtubeInput').style.display = type === 'youtube' ? 'flex' : 'none';
             document.getElementById('localInput').style.display = type === 'local' ? 'block' : 'none';
             document.getElementById('spotifyInput').style.display = type === 'spotify' ? 'block' : 'none';
+            document.getElementById('soundcloudInput').style.display = type === 'soundcloud' ? 'block' : 'none';
         }
 
         async function api(url, method = 'GET', body = null) {
@@ -722,6 +735,33 @@
             await api('/queue/add', 'POST', { path: spotifyId, type: 'spotify' });
         }
 
+        async function searchSoundCloud() {
+            const input = document.getElementById('soundcloudSearchInput');
+            const query = input.value.trim();
+            if (!query) return;
+            const list = document.getElementById('soundcloudResults');
+            list.innerHTML = '<li class="empty-media">Ricerca in corso...</li>';
+            try {
+                const data = await api('/soundcloud/search?q=' + encodeURIComponent(query));
+                if (data.results.length === 0) {
+                    list.innerHTML = '<li class="empty-media">Nessun risultato</li>';
+                } else {
+                    list.innerHTML = data.results.map(r =>
+                        `<li>
+                            <span><strong>${r.title}</strong>${r.artist ? ' — ' + r.artist : ''}<br><small style="color:#888">${Math.floor(r.duration_ms/60000)}:${String(Math.floor((r.duration_ms%60000)/1000)).padStart(2,'0')}</small></span>
+                            <button onclick="addSoundCloudTrack('${r.url.replace(/'/g, "\\'")}')">+</button>
+                        </li>`
+                    ).join('');
+                }
+            } catch (e) {
+                list.innerHTML = '<li class="empty-media">Errore nella ricerca</li>';
+            }
+        }
+
+        async function addSoundCloudTrack(url) {
+            await api('/queue/add', 'POST', { path: url, type: 'soundcloud' });
+        }
+
         async function removeTrack(id) {
             await api('/queue/' + id, 'DELETE');
         }
@@ -763,7 +803,7 @@
                 const artistPart = t.artist ? `<span class="track-artist">${t.artist}</span>` : '';
                 return `<li draggable="true" data-track-id="${t.id}" data-index="${i}">
                     <span class="drag-handle">&#10303;</span>
-                    <span class="track-type">${t.type === 'youtube' ? 'YT' : t.type === 'spotify' ? 'SP' : 'FILE'}</span>
+                    <span class="track-type">${t.type === 'youtube' ? 'YT' : t.type === 'spotify' ? 'SP' : t.type === 'soundcloud' ? 'SC' : 'FILE'}</span>
                     <span class="track-name">${t.title}${artistPart ? '<br>' + artistPart : ''}</span>
                     ${i > 0 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i - 1})">&#8593;</button>` : ''}
                     ${i < len - 1 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i + 1})">&#8595;</button>` : ''}
@@ -817,7 +857,7 @@
                 } else {
                     list.innerHTML = data.history.map((e, i) =>
                         `<li>
-                            <span class="track-type">${e.track.type === 'youtube' ? 'YT' : e.track.type === 'spotify' ? 'SP' : 'FILE'}</span>
+                            <span class="track-type">${e.track.type === 'youtube' ? 'YT' : e.track.type === 'spotify' ? 'SP' : e.track.type === 'soundcloud' ? 'SC' : 'FILE'}</span>
                             <span class="track-name">${e.track.title}</span>
                             <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
                             <button onclick="requeueFromHistory(${i})">+ Coda</button>
@@ -910,6 +950,11 @@
         // Enter key for Spotify search
         document.getElementById('spotifySearchInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') searchSpotify();
+        });
+
+        // Enter key for SoundCloud search
+        document.getElementById('soundcloudSearchInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') searchSoundCloud();
         });
 
         // Enter key for playlist save
