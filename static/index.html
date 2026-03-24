@@ -347,6 +347,7 @@
         <div class="type-toggle">
             <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
             <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
+            <button id="btnSpotify" onclick="setType('spotify')" style="display:none">Spotify</button>
         </div>
         <!-- Visibile solo quando type=youtube -->
         <div class="add-track" id="youtubeInput" style="display:none">
@@ -362,6 +363,16 @@
                 <input type="file" id="fileUpload" accept="audio/*,video/*">
                 <button onclick="uploadFile()">Carica</button>
             </div>
+        </div>
+        <!-- Visibile solo quando type=spotify -->
+        <div id="spotifyInput" style="display:none">
+            <div class="add-track">
+                <input type="text" id="spotifySearchInput" placeholder="Cerca su Spotify...">
+                <button onclick="searchSpotify()">Cerca</button>
+            </div>
+            <ul class="media-list" id="spotifyResults">
+                <li class="empty-media">Cerca un brano su Spotify</li>
+            </ul>
         </div>
     </div>
 
@@ -390,8 +401,10 @@
             trackType = type;
             document.getElementById('btnLocal').classList.toggle('active', type === 'local');
             document.getElementById('btnYoutube').classList.toggle('active', type === 'youtube');
+            document.getElementById('btnSpotify').classList.toggle('active', type === 'spotify');
             document.getElementById('youtubeInput').style.display = type === 'youtube' ? 'flex' : 'none';
             document.getElementById('localInput').style.display = type === 'local' ? 'block' : 'none';
+            document.getElementById('spotifyInput').style.display = type === 'spotify' ? 'block' : 'none';
         }
 
         async function api(url, method = 'GET', body = null) {
@@ -447,6 +460,34 @@
             refreshState();
         }
 
+        async function searchSpotify() {
+            const input = document.getElementById('spotifySearchInput');
+            const query = input.value.trim();
+            if (!query) return;
+            const list = document.getElementById('spotifyResults');
+            list.innerHTML = '<li class="empty-media">Ricerca in corso...</li>';
+            try {
+                const data = await api('/spotify/search?q=' + encodeURIComponent(query));
+                if (data.results.length === 0) {
+                    list.innerHTML = '<li class="empty-media">Nessun risultato</li>';
+                } else {
+                    list.innerHTML = data.results.map(r =>
+                        `<li>
+                            <span><strong>${r.title}</strong> — ${r.artist}<br><small style="color:#888">${r.album} · ${Math.floor(r.duration_ms/60000)}:${String(Math.floor((r.duration_ms%60000)/1000)).padStart(2,'0')}</small></span>
+                            <button onclick="addSpotifyTrack('${r.spotify_id}')">+</button>
+                        </li>`
+                    ).join('');
+                }
+            } catch (e) {
+                list.innerHTML = '<li class="empty-media">Errore nella ricerca</li>';
+            }
+        }
+
+        async function addSpotifyTrack(spotifyId) {
+            await api('/queue/add', 'POST', { path: spotifyId, type: 'spotify' });
+            refreshState();
+        }
+
         async function removeTrack(id) {
             await api('/queue/' + id, 'DELETE');
             refreshState();
@@ -498,7 +539,7 @@
                     list.innerHTML = state.queue.map((t, i) =>
                         `<li draggable="true" data-track-id="${t.id}" data-index="${i}">
                             <span class="drag-handle">&#10303;</span>
-                            <span class="track-type">${t.type === 'youtube' ? 'YT' : 'FILE'}</span>
+                            <span class="track-type">${t.type === 'youtube' ? 'YT' : t.type === 'spotify' ? 'SP' : 'FILE'}</span>
                             <span class="track-name">${t.title}</span>
                             ${i > 0 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i - 1})">&#8593;</button>` : ''}
                             ${i < len - 1 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i + 1})">&#8595;</button>` : ''}
@@ -557,7 +598,7 @@
                 } else {
                     list.innerHTML = data.history.map((e, i) =>
                         `<li>
-                            <span class="track-type">${e.track.type === 'youtube' ? 'YT' : 'FILE'}</span>
+                            <span class="track-type">${e.track.type === 'youtube' ? 'YT' : e.track.type === 'spotify' ? 'SP' : 'FILE'}</span>
                             <span class="track-name">${e.track.title}</span>
                             <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
                             <button onclick="requeueFromHistory(${i})">+ Coda</button>
@@ -594,6 +635,18 @@
         // Allow Enter key to add track
         document.getElementById('trackInput').addEventListener('keydown', (e) => {
             if (e.key === 'Enter') addTrack();
+        });
+
+        // Enter key for Spotify search
+        document.getElementById('spotifySearchInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') searchSpotify();
+        });
+
+        // Check if Spotify is configured and show button
+        api('/spotify/status').then(data => {
+            if (data.configured) {
+                document.getElementById('btnSpotify').style.display = '';
+            }
         });
 
         // Poll state every second

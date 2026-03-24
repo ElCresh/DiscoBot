@@ -1,6 +1,5 @@
 """REST API routes for remote control."""
 
-import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -8,15 +7,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from app.config import settings
 from app.models import TrackRequest, Track, PlayerState, HistoryEntry
 from app.player import AudioPlayer
 
 app = FastAPI(title="DiscoBot", version="1.0.0")
 
-cors_origins = os.environ.get(
-    "DISCOBOT_CORS_ORIGINS",
-    "http://localhost:8000,http://127.0.0.1:8000",
-).split(",")
+cors_origins = settings.cors_origins.split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -207,6 +204,29 @@ def add_media_to_queue(filename: str):
         return player.add_track(str(filepath), "local")
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Spotify ---
+
+@app.get("/spotify/status")
+def spotify_status():
+    """Check if Spotify integration is configured."""
+    configured = bool(settings.spotify_client_id and settings.spotify_client_secret)
+    return {"configured": configured}
+
+
+@app.get("/spotify/search")
+def spotify_search(q: str, limit: int = 10):
+    """Search Spotify for tracks."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query is required")
+    from app.spotify import search_tracks
+
+    try:
+        results = search_tracks(q, min(limit, 50))
+        return {"results": results}
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 # --- Web UI ---

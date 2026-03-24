@@ -5,6 +5,7 @@ from enum import Enum
 class TrackType(str, Enum):
     LOCAL = "local"
     YOUTUBE = "youtube"
+    SPOTIFY = "spotify"
 
 
 class TrackRequest(BaseModel):
@@ -23,6 +24,15 @@ class Track(BaseModel):
 class HistoryEntry(BaseModel):
     track: Track
     played_at: str  # ISO 8601
+
+
+class SpotifySearchResult(BaseModel):
+    spotify_id: str
+    title: str
+    artist: str
+    album: str
+    duration_ms: int
+    album_art_url: str | None = None
 
 
 class PlayerState(BaseModel):

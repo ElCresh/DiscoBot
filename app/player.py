@@ -179,6 +179,13 @@ class AudioPlayer:
         """Resolve a track path to a playable URL/path, title, and duration."""
         if track_type == TrackType.YOUTUBE:
             return extract_audio_url(path)
+        elif track_type == TrackType.SPOTIFY:
+            from app.spotify import build_youtube_search_query
+            from app.youtube import search_youtube_audio
+
+            search_query, display_title, duration = build_youtube_search_query(path)
+            audio_url, _, yt_duration = search_youtube_audio(search_query)
+            return audio_url, display_title, duration or yt_duration
         else:
             p = Path(path)
             if not p.exists():
@@ -213,11 +220,15 @@ class AudioPlayer:
 
     def add_track(self, path: str, track_type: TrackType) -> Track:
         """Add a track to the queue. Starts playing if nothing is playing."""
-        # Resolve YouTube metadata before acquiring lock (network I/O)
+        # Resolve metadata before acquiring lock (network I/O)
         if track_type == TrackType.YOUTUBE:
             from app.youtube import extract_youtube_metadata
 
             title, duration = extract_youtube_metadata(path)
+        elif track_type == TrackType.SPOTIFY:
+            from app.spotify import extract_spotify_metadata
+
+            title, duration = extract_spotify_metadata(path)
         else:
             title = Path(path).stem
             duration = None

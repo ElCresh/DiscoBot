@@ -75,6 +75,30 @@ def extract_youtube_metadata(url: str) -> tuple[str, float | None]:
         return "Unknown", None
 
 
+def search_youtube_audio(query: str) -> tuple[str, str, float | None]:
+    """Search YouTube by text query and extract audio URL for the top result.
+
+    Returns (audio_url, title, duration_in_seconds).
+    """
+    import yt_dlp
+
+    opts = {
+        "format": "bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": False,
+        "default_search": "ytsearch1",
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(query, download=False)
+        if "entries" in info:
+            info = info["entries"][0]
+        audio_url = info["url"]
+        title = info.get("title", "Unknown")
+        duration = info.get("duration")
+        return audio_url, title, duration
+
+
 def extract_audio_url(url: str) -> tuple[str, str, float | None]:
     """Extract audio URL from YouTube link. Tries yt-dlp first, falls back to pytubefix.
 
