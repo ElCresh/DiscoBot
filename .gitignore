@@ -12,6 +12,7 @@ dist/
 build/
 .venv/
 venv/
+.cache
 
 # Player state
 state.json
