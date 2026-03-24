@@ -298,6 +298,78 @@ def delete_playlist(name: str):
         raise HTTPException(status_code=404, detail="Playlist not found")
 
 
+# --- YouTube ---
+
+@app.get("/youtube/search")
+def youtube_search(q: str, limit: int = 10):
+    """Search YouTube for tracks."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query is required")
+    from app.youtube import search_youtube
+
+    try:
+        results = search_youtube(q, min(limit, 20))
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# --- Unified search ---
+
+@app.get("/search")
+async def unified_search(q: str, limit: int = 5):
+    """Search all sources in parallel and return grouped results."""
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query is required")
+    query = q.strip()
+    cap = min(limit, 20)
+
+    async def _search_local():
+        lowq = query.lower()
+        try:
+            return [
+                {"filename": f.name, "title": f.stem}
+                for f in sorted(MEDIA_DIR.iterdir())
+                if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS and lowq in f.name.lower()
+            ][:cap]
+        except Exception:
+            return []
+
+    async def _search_youtube():
+        from app.youtube import search_youtube
+        try:
+            return await asyncio.to_thread(search_youtube, query, cap)
+        except Exception:
+            return []
+
+    async def _search_spotify():
+        if not (settings.spotify_client_id and settings.spotify_client_secret):
+            return []
+        from app.spotify import search_tracks
+        try:
+            return await asyncio.to_thread(search_tracks, query, cap)
+        except Exception:
+            return []
+
+    async def _search_soundcloud():
+        from app.soundcloud import search_soundcloud
+        try:
+            return await asyncio.to_thread(search_soundcloud, query, cap)
+        except Exception:
+            return []
+
+    local, youtube, spotify, soundcloud = await asyncio.gather(
+        _search_local(), _search_youtube(), _search_spotify(), _search_soundcloud()
+    )
+
+    return {
+        "local": local,
+        "youtube": youtube,
+        "spotify": spotify,
+        "soundcloud": soundcloud,
+    }
+
+
 # --- SoundCloud ---
 
 @app.get("/soundcloud/search")

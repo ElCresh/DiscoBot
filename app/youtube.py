@@ -99,6 +99,39 @@ def search_youtube_audio(query: str) -> tuple[str, str, float | None]:
         return audio_url, title, duration
 
 
+def search_youtube(query: str, limit: int = 5) -> list[dict]:
+    """Search YouTube for tracks. Returns list of dicts with url, title, artist, duration_ms."""
+    import yt_dlp
+
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+    }
+    results = []
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+            entries = list(info.get("entries", [])) if info else []
+            for entry in entries:
+                if not entry:
+                    continue
+                url = entry.get("url") or entry.get("webpage_url", "")
+                # Ensure we have a proper YouTube URL
+                vid_id = entry.get("id", "")
+                if vid_id and not url.startswith("http"):
+                    url = f"https://www.youtube.com/watch?v={vid_id}"
+                results.append({
+                    "url": url,
+                    "title": entry.get("title", "Unknown"),
+                    "artist": entry.get("uploader") or entry.get("channel", ""),
+                    "duration_ms": int(entry["duration"] * 1000) if entry.get("duration") else 0,
+                })
+    except Exception:
+        logger.exception("YouTube search failed")
+    return results
+
+
 def extract_audio_url(url: str) -> tuple[str, str, float | None]:
     """Extract audio URL from YouTube link. Tries yt-dlp first, falls back to pytubefix.
 
