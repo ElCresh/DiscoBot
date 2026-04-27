@@ -1,7 +1,7 @@
 """Native fullscreen kiosk presentation window (PySide6).
 
-Renders VLC video into an embedded widget, shows cover art for local files,
-and a live "now playing + upcoming queue" panel synced to the player state.
+Layout: header (title/artist/progress + QR) over a row with the video/cover
+on the left and the upcoming queue on the right.
 """
 
 import logging
@@ -9,9 +9,10 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+import qrcode
 import vlc
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -35,16 +36,56 @@ STYLESHEET = """
 QMainWindow { background-color: #1a1a2e; }
 QWidget { color: #eee; }
 QLabel { background-color: transparent; }
-QFrame#nowPlaying { background-color: #16213e; border-radius: 12px; padding: 18px; }
-QLabel#title { color: #e94560; font-size: 28pt; font-weight: 700; }
+QFrame#header { background-color: #16213e; border-radius: 12px; }
+QLabel#title { color: #e94560; font-size: 32pt; font-weight: 700; }
 QLabel#artist { color: #ddd; font-size: 16pt; }
-QLabel#progress { color: #aaa; font-size: 14pt; }
-QLabel#idle { color: #e94560; font-size: 48pt; font-weight: 700; }
-QLabel#clock { color: #aaa; font-size: 24pt; }
+QLabel#progress { color: #aaa; font-size: 18pt; font-weight: 600; }
+QLabel#qrcode { background-color: white; border-radius: 6px; padding: 3px; }
+QLabel#clock { color: #aaa; font-size: 72pt; font-weight: 300; }
 QListWidget { background-color: #0f3460; border: none; border-radius: 12px; padding: 8px; font-size: 14pt; }
 QListWidget::item { padding: 10px; border-bottom: 1px solid #16213e; }
 QListWidget::item:last { border-bottom: none; }
 """
+
+
+_QR_SIZE = 160
+
+
+def _resolve_track_url(track: Track) -> str | None:
+    """Public URL of the current media, or None for local files."""
+    if track.type == TrackType.YOUTUBE or track.type == TrackType.SOUNDCLOUD:
+        return track.path or None
+    if track.type == TrackType.SPOTIFY:
+        return f"https://open.spotify.com/track/{track.path}" if track.path else None
+    return None
+
+
+def make_qr_pixmap(text: str, size: int = _QR_SIZE) -> QPixmap:
+    """Render a QR code as a black-on-white QPixmap of exactly `size` px,
+    using QPainter (no PIL dependency). Uses a fractional cell size with
+    rounded rect coordinates so the matrix fills the requested area tightly."""
+    qr = qrcode.QRCode(border=2, box_size=1, error_correction=qrcode.constants.ERROR_CORRECT_M)
+    qr.add_data(text)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    n = len(matrix)
+    pix = QPixmap(size, size)
+    pix.fill(Qt.white)
+    painter = QPainter(pix)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("black"))
+    cell_f = size / n
+    for y, row in enumerate(matrix):
+        for x, dark in enumerate(row):
+            if not dark:
+                continue
+            px = int(round(x * cell_f))
+            py = int(round(y * cell_f))
+            w = int(round((x + 1) * cell_f)) - px
+            h = int(round((y + 1) * cell_f)) - py
+            painter.drawRect(px, py, w, h)
+    painter.end()
+    return pix
 
 
 def _format_time(seconds: float) -> str:
@@ -152,11 +193,52 @@ class PresentationWindow(QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(24)
+        root.setSpacing(16)
 
-        # LEFT — stacked: video / cover / idle
+        # --- HEADER (full width): title/artist/progress on the left, QR on the right ---
+        header = QFrame()
+        header.setObjectName("header")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(24, 16, 16, 16)
+        hl.setSpacing(20)
+
+        info = QVBoxLayout()
+        info.setSpacing(4)
+        self._title_label = QLabel("Nessuna traccia")
+        self._title_label.setObjectName("title")
+        self._title_label.setWordWrap(True)
+        self._artist_label = QLabel("")
+        self._artist_label.setObjectName("artist")
+        self._artist_label.setWordWrap(True)
+        self._progress_label = QLabel("0:00 / 0:00")
+        self._progress_label.setObjectName("progress")
+        info.addWidget(self._title_label)
+        info.addWidget(self._artist_label)
+        info.addStretch(1)
+        info.addWidget(self._progress_label)
+        hl.addLayout(info, stretch=1)
+
+        self._qr_label = QLabel()
+        self._qr_label.setObjectName("qrcode")
+        # 3px padding each side from stylesheet → label = QR + 6
+        self._qr_label.setFixedSize(_QR_SIZE + 6, _QR_SIZE + 6)
+        self._qr_label.setAlignment(Qt.AlignCenter)
+        # Keep the slot reserved when hidden so the header layout doesn't shift
+        sp = self._qr_label.sizePolicy()
+        sp.setRetainSizeWhenHidden(True)
+        self._qr_label.setSizePolicy(sp)
+        self._qr_label.setVisible(False)
+        hl.addWidget(self._qr_label, alignment=Qt.AlignVCenter | Qt.AlignRight)
+
+        header.setMinimumHeight(_QR_SIZE + 32)
+        root.addWidget(header)
+
+        # --- MAIN row: video stack (left) + queue (right) ---
+        main = QHBoxLayout()
+        main.setSpacing(16)
+
         self._stack = QStackedWidget()
         self._stack.setMinimumWidth(800)
 
@@ -171,52 +253,31 @@ class PresentationWindow(QMainWindow):
         idle_widget = QWidget()
         idle_layout = QVBoxLayout(idle_widget)
         idle_layout.setAlignment(Qt.AlignCenter)
-        self._idle_title = QLabel("DiscoBot")
-        self._idle_title.setObjectName("idle")
-        self._idle_title.setAlignment(Qt.AlignCenter)
         self._idle_clock = QLabel("--:--")
         self._idle_clock.setObjectName("clock")
         self._idle_clock.setAlignment(Qt.AlignCenter)
-        idle_layout.addWidget(self._idle_title)
-        idle_layout.addSpacing(16)
         idle_layout.addWidget(self._idle_clock)
         self._stack.addWidget(idle_widget)
 
-        root.addWidget(self._stack, stretch=3)
+        main.addWidget(self._stack, stretch=3)
 
-        # RIGHT — now playing + queue
-        right = QVBoxLayout()
-        right.setSpacing(16)
-
-        now = QFrame()
-        now.setObjectName("nowPlaying")
-        nl = QVBoxLayout(now)
-        self._title_label = QLabel("—")
-        self._title_label.setObjectName("title")
-        self._title_label.setWordWrap(True)
-        self._artist_label = QLabel("")
-        self._artist_label.setObjectName("artist")
-        self._artist_label.setWordWrap(True)
-        self._progress_label = QLabel("0:00 / 0:00")
-        self._progress_label.setObjectName("progress")
-        nl.addWidget(self._title_label)
-        nl.addWidget(self._artist_label)
-        nl.addWidget(self._progress_label)
-        right.addWidget(now)
-
+        # Queue column (no more "now playing" card — info is in the header)
+        queue_col = QVBoxLayout()
+        queue_col.setSpacing(8)
         queue_label = QLabel("Prossime tracce")
         queue_label.setStyleSheet("color: #aaa; font-size: 14pt; padding-left: 4px;")
-        right.addWidget(queue_label)
-
+        queue_col.addWidget(queue_label)
         self._queue_list = QListWidget()
         self._queue_list.setSelectionMode(QListWidget.NoSelection)
         self._queue_list.setFocusPolicy(Qt.NoFocus)
-        right.addWidget(self._queue_list, stretch=1)
+        queue_col.addWidget(self._queue_list, stretch=1)
 
-        right_widget = QWidget()
-        right_widget.setLayout(right)
-        right_widget.setMinimumWidth(420)
-        root.addWidget(right_widget, stretch=2)
+        queue_widget = QWidget()
+        queue_widget.setLayout(queue_col)
+        queue_widget.setMinimumWidth(420)
+        main.addWidget(queue_widget, stretch=2)
+
+        root.addLayout(main, stretch=1)
 
         self.setCentralWidget(central)
 
@@ -246,12 +307,15 @@ class PresentationWindow(QMainWindow):
             if track.id != self._current_track_id:
                 self._current_track_id = track.id
                 self._switch_media_view(track)
+                self._update_qr(track)
         else:
             self._current_track_id = None
             self._title_label.setText("Nessuna traccia")
             self._artist_label.setText("")
             self._progress_label.setText("0:00 / 0:00")
             self._stack.setCurrentIndex(2)  # idle
+            self._qr_label.setVisible(False)
+            self._qr_label.clear()
 
         # Queue
         self._queue_list.clear()
@@ -281,6 +345,21 @@ class PresentationWindow(QMainWindow):
             target=worker, args=(track.id,), daemon=True
         )
         self._cover_thread.start()
+
+    def _update_qr(self, track: Track):
+        url = _resolve_track_url(track)
+        if not url:
+            self._qr_label.setVisible(False)
+            self._qr_label.clear()
+            return
+        try:
+            pix = make_qr_pixmap(url, size=_QR_SIZE)
+        except Exception:
+            logger.warning("QR generation failed for %s", url, exc_info=True)
+            self._qr_label.setVisible(False)
+            return
+        self._qr_label.setPixmap(pix)
+        self._qr_label.setVisible(True)
 
     def _apply_cover(self, track_id: int, path: str | None):
         if track_id != self._current_track_id:
