@@ -124,6 +124,13 @@ def set_repeat(mode: RepeatMode):
     return {"repeat": mode}
 
 
+@app.post("/player/normalize")
+def set_normalize(enabled: bool):
+    """Toggle audio auto-leveling between sources. Applies from the next track."""
+    player.set_normalize(enabled)
+    return {"normalize": enabled}
+
+
 @app.get("/player/state", response_model=PlayerState)
 def get_state():
     """Get current player state."""

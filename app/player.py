@@ -83,6 +83,7 @@ class AudioPlayer:
         self._history: list[dict] = []
         self._shuffle = False
         self._repeat = RepeatMode.OFF
+        self._normalize = True
         self._lock = threading.Lock()
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="discobot_midi_"))
         self._fluid = self._init_fluidsynth()
@@ -148,6 +149,7 @@ class AudioPlayer:
                 "volume": self._volume,
                 "shuffle": self._shuffle,
                 "repeat": self._repeat.value,
+                "normalize": self._normalize,
                 "current_track": current_data,
                 "queue": [t.model_dump() for t in self._queue],
                 "history": self._history,
@@ -168,6 +170,7 @@ class AudioPlayer:
             self._volume = data.get("volume", 80)
             self._shuffle = data.get("shuffle", False)
             self._repeat = RepeatMode(data.get("repeat", "off"))
+            self._normalize = data.get("normalize", True)
             self._history = data.get("history", [])[:MAX_HISTORY]
 
             # Restore queue
@@ -311,6 +314,11 @@ class AudioPlayer:
                 track.duration = duration
 
             media = self._instance.media_new(playable_url)
+            if self._normalize:
+                # AGC: sliding-window RMS normalizer to level out volume between sources
+                media.add_option(":audio-filter=normvol")
+                media.add_option(":norm-buff-size=20")
+                media.add_option(":norm-max-level=2.0")
             self._player.set_media(media)
             self._player.play()
             self._player.audio_set_volume(self._volume)
@@ -456,6 +464,13 @@ class AudioPlayer:
             self._save_state()
             self._broadcast_state()
 
+    def set_normalize(self, enabled: bool):
+        """Toggle audio auto-leveling. Takes effect on the next track."""
+        with self._lock:
+            self._normalize = enabled
+            self._save_state()
+            self._broadcast_state()
+
     def remove_track(self, track_id: int) -> bool:
         """Remove a track from the queue by ID."""
         with self._lock:
@@ -549,6 +564,7 @@ class AudioPlayer:
             duration=length / 1000.0 if length > 0 else 0.0,
             shuffle=self._shuffle,
             repeat=self._repeat,
+            normalize=self._normalize,
         )
 
     def get_state(self) -> PlayerState:

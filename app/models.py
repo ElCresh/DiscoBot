@@ -63,3 +63,4 @@ class PlayerState(BaseModel):
     duration: float = 0.0  # seconds
     shuffle: bool = False
     repeat: RepeatMode = RepeatMode.OFF
+    normalize: bool = True  # auto-leveling between sources

@@ -74,7 +74,7 @@
             gap: 8px;
             margin-bottom: 16px;
         }
-        .controls button {
+        .controls button, .mode-btn {
             background: #0f3460;
             border: none;
             color: #eee;
@@ -84,11 +84,16 @@
             font-size: 1.1em;
             cursor: pointer;
             transition: background 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            padding: 0;
         }
-        .controls button:hover { background: #e94560; }
+        .controls button:hover, .mode-btn:hover { background: #e94560; }
         .controls button.play-btn { width: 56px; height: 56px; font-size: 1.4em; }
-        .controls button.active { background: #e94560; }
-        .controls button.mode-btn { width: 38px; height: 38px; font-size: 0.85em; }
+        .controls button.active, .mode-btn.active { background: #e94560; }
+        .mode-btn { width: 38px; height: 38px; font-size: 0.85em; }
         .volume {
             display: flex;
             align-items: center;
@@ -491,7 +496,7 @@
                 <div class="controls">
                     <button class="mode-btn" id="shuffleBtn" onclick="toggleShuffle()" title="Shuffle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>
                     <button onclick="api('/player/previous', 'POST')">&#9198;</button>
-                    <button onclick="api('/player/stop', 'POST')">&#9209;</button>
+                    <button class="play-btn" onclick="api('/player/stop', 'POST')">&#9209;</button>
                     <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">&#9654;</button>
                     <button onclick="api('/player/skip', 'POST')">&#9197;</button>
                     <button class="mode-btn" id="repeatBtn" onclick="cycleRepeat()" title="Repeat"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
@@ -501,6 +506,7 @@
                     <input type="range" id="volumeSlider" min="0" max="100" value="80"
                            oninput="api('/player/volume?volume=' + this.value, 'POST')">
                     <span id="volumeLabel">80</span>
+                    <button class="mode-btn" id="normalizeBtn" onclick="toggleNormalize()" title="Auto-livellamento volume" style="margin-left:8px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="4" y2="14"/><line x1="9" y1="20" x2="9" y2="10"/><line x1="14" y1="20" x2="14" y2="4"/><line x1="19" y1="20" x2="19" y2="12"/></svg></button>
                 </div>
             </div>
 
@@ -608,6 +614,7 @@
         let isPlaying = false;
         let currentShuffle = false;
         let currentRepeat = 'off';
+        let currentNormalize = true;
         let ws = null;
         let wsReconnectTimer = null;
 
@@ -691,6 +698,10 @@
             } else {
                 repeatBtn.innerHTML = repeatSvg;
             }
+
+            // Auto-livellamento (normalize)
+            currentNormalize = state.normalize !== false;
+            document.getElementById('normalizeBtn').classList.toggle('active', currentNormalize);
 
             // Queue
             renderQueue(state.queue);
@@ -919,6 +930,10 @@
             const modes = ['off', 'one', 'all'];
             const next = modes[(modes.indexOf(currentRepeat) + 1) % modes.length];
             api('/player/repeat?mode=' + next, 'POST');
+        }
+
+        function toggleNormalize() {
+            api('/player/normalize?enabled=' + (!currentNormalize), 'POST');
         }
 
         function formatTime(seconds) {
