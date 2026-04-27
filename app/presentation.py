@@ -121,10 +121,12 @@ class PresentationWindow(QMainWindow):
         ws_manager.subscribe_sync(lambda data: self.state_received.emit(data))
         self.state_received.connect(self._on_state)
 
-        # VLC vout event → video aspect ratio (fired from a VLC thread, signal hops to GUI thread)
+        # VLC vout event → real video dimensions. Until this fires, we keep the
+        # cover/idle pane visible — that way the user never sees the black
+        # letterbox flash before the first frame is rendered.
         events = player.vlc_player.event_manager()
         events.event_attach(vlc.EventType.MediaPlayerVout, self._on_vout)
-        self.video_size_received.connect(self.video_container.set_aspect)
+        self.video_size_received.connect(self._on_video_ready)
 
         # Progress timer (state broadcasts don't include position deltas)
         self._progress_timer = QTimer(self)
@@ -262,16 +264,11 @@ class PresentationWindow(QMainWindow):
 
     def _switch_media_view(self, track: Track):
         self._cover_label.clear()
-        if track.type in (TrackType.YOUTUBE, TrackType.SPOTIFY):
-            # Default to 16:9 BEFORE VLC starts rendering — covers the vast
-            # majority of YouTube content with no visible black bars on first
-            # frame. The MediaPlayerVout event corrects the aspect for vertical
-            # / 4:3 / square content shortly after.
-            self.video_container.set_aspect(16, 9)
-            self._stack.setCurrentIndex(0)
-            return
 
-        # Audio source — show idle until embedded/remote cover resolves.
+        # Show idle by default; cover takes over if available.
+        # The video pane is shown only when VLC's vout event reports actual
+        # frame dimensions (see _on_video_ready), so any source — local mp4,
+        # YouTube, Spotify — gets its real aspect ratio with no flash.
         self._stack.setCurrentIndex(2)
 
         def worker(track_id: int):
@@ -318,14 +315,19 @@ class PresentationWindow(QMainWindow):
     # --- VLC vout handler ---
 
     def _on_vout(self, event):
-        """Fired from a VLC thread when video output starts. Reads the source
-        dimensions and hops the result to the GUI thread via Signal."""
+        """Fired from a VLC thread when video output starts/stops. Reads the
+        source dimensions and hops to the GUI thread via Signal."""
         try:
             w, h = self._player.vlc_player.video_get_size(0)
         except Exception:
             return
         if w and h:
             self.video_size_received.emit(int(w), int(h))
+
+    def _on_video_ready(self, w: int, h: int):
+        """GUI-thread slot: VLC has actual video — set aspect and switch pane."""
+        self.video_container.set_aspect(w, h)
+        self._stack.setCurrentIndex(0)
 
     # --- Resize handling ---
 
