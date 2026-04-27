@@ -178,9 +178,18 @@ def clear_queue():
 # --- History ---
 
 @app.get("/history")
-def get_history():
-    """Get playback history."""
-    return {"history": player.get_history()}
+def get_history(offset: int = 0, limit: int = 15):
+    """Get a paginated slice of playback history.
+
+    Returns {items, total, offset, limit}. Indices in items are relative to
+    the slice; for requeue/remove use offset + local index as the global index.
+    """
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be 1..200")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    items, total = player.get_history(offset=offset, limit=limit)
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
 @app.post("/history/{index}/requeue", response_model=Track)

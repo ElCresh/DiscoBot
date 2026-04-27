@@ -23,7 +23,7 @@ MIDI_EXTENSIONS = {".mid", ".midi"}
 SOUNDFONTS_DIR = Path("soundfonts")
 STATE_FILE = Path("state.json")
 PLAYLISTS_DIR = Path("playlists")
-MAX_HISTORY = 50
+MAX_HISTORY = 10000  # safety cap on stored entries; UI paginates the display
 
 
 def _read_local_metadata(filepath: str) -> tuple[str, str | None, str | None]:
@@ -543,10 +543,15 @@ class AudioPlayer:
                     return True
             return False
 
-    def get_history(self) -> list[HistoryEntry]:
-        """Get playback history."""
+    def get_history(self, offset: int = 0, limit: int | None = None) -> tuple[list[HistoryEntry], int]:
+        """Get a slice of playback history. Returns (items, total)."""
         with self._lock:
-            return [HistoryEntry(**e) for e in self._history]
+            total = len(self._history)
+            if offset < 0:
+                offset = 0
+            end = total if limit is None else min(total, offset + limit)
+            slice_ = self._history[offset:end]
+            return [HistoryEntry(**e) for e in slice_], total
 
     def remove_history_entry(self, index: int):
         """Remove a single entry from playback history."""

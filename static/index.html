@@ -371,6 +371,28 @@
         }
         #clearHistoryBtn:hover { background: #e94560; color: #fff; }
 
+        .history-pagination {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 8px;
+            font-size: 0.85em;
+            color: #aaa;
+        }
+        .history-pagination button {
+            background: #0f3460;
+            border: none;
+            color: #ddd;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+        }
+        .history-pagination button:hover:not(:disabled) { background: #e94560; color: #fff; }
+        .history-pagination button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .history-pagination .page-info { flex: 1; text-align: center; }
+
         /* Playlist styles */
         .playlist-controls {
             display: flex;
@@ -604,6 +626,11 @@
                 <ul class="history-list" id="historyList">
                     <li class="empty-history">Nessuna traccia nella cronologia</li>
                 </ul>
+                <div class="history-pagination" id="historyPagination" style="display:none">
+                    <button id="histPrev" onclick="historyPrev()">&#9664; Prec.</button>
+                    <span class="page-info" id="histPageInfo">—</span>
+                    <button id="histNext" onclick="historyNext()">Succ. &#9654;</button>
+                </div>
                 <button id="clearHistoryBtn" style="display:none" onclick="clearHistory()">Cancella Cronologia</button>
             </div>
         </div>
@@ -996,29 +1023,66 @@
             });
         }
 
+        let historyOffset = 0;
+        const historyLimit = 15;
+
         async function refreshHistory() {
             try {
-                const data = await api('/history');
+                const data = await api('/history?offset=' + historyOffset + '&limit=' + historyLimit);
                 const list = document.getElementById('historyList');
-                const btn = document.getElementById('clearHistoryBtn');
-                if (data.history.length === 0) {
+                const pag = document.getElementById('historyPagination');
+                const clearBtn = document.getElementById('clearHistoryBtn');
+
+                // Clamp offset if entries were removed and we now overshoot
+                if (historyOffset >= data.total && data.total > 0) {
+                    historyOffset = Math.max(0, Math.floor((data.total - 1) / historyLimit) * historyLimit);
+                    return refreshHistory();
+                }
+
+                if (data.total === 0) {
                     list.innerHTML = '<li class="empty-history">Nessuna traccia nella cronologia</li>';
-                    btn.style.display = 'none';
+                    pag.style.display = 'none';
+                    clearBtn.style.display = 'none';
+                    return;
+                }
+
+                list.innerHTML = data.items.map((e, i) => {
+                    const globalIdx = data.offset + i;
+                    return `<li>
+                        <span class="track-type">${e.track.type === 'youtube' ? 'YT' : e.track.type === 'spotify' ? 'SP' : e.track.type === 'soundcloud' ? 'SC' : 'FILE'}</span>
+                        <span class="track-name">${e.track.title}</span>
+                        <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
+                        <button onclick="requeueFromHistory(${globalIdx})">+ Coda</button>
+                        <button onclick="removeHistoryEntry(${globalIdx})" style="background:none;color:#e94560;padding:4px;">&#10005;</button>
+                    </li>`;
+                }).join('');
+
+                clearBtn.style.display = 'block';
+
+                const totalPages = Math.ceil(data.total / data.limit);
+                const currentPage = Math.floor(data.offset / data.limit) + 1;
+                if (totalPages > 1) {
+                    pag.style.display = 'flex';
+                    document.getElementById('histPageInfo').textContent =
+                        `${currentPage} / ${totalPages} (${data.total} tracce)`;
+                    document.getElementById('histPrev').disabled = data.offset === 0;
+                    document.getElementById('histNext').disabled = data.offset + data.limit >= data.total;
                 } else {
-                    list.innerHTML = data.history.map((e, i) =>
-                        `<li>
-                            <span class="track-type">${e.track.type === 'youtube' ? 'YT' : e.track.type === 'spotify' ? 'SP' : e.track.type === 'soundcloud' ? 'SC' : 'FILE'}</span>
-                            <span class="track-name">${e.track.title}</span>
-                            <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
-                            <button onclick="requeueFromHistory(${i})">+ Coda</button>
-                            <button onclick="removeHistoryEntry(${i})" style="background:none;color:#e94560;padding:4px;">&#10005;</button>
-                        </li>`
-                    ).join('');
-                    btn.style.display = 'block';
+                    pag.style.display = 'none';
                 }
             } catch (e) {
                 console.error('History refresh failed:', e);
             }
+        }
+
+        function historyPrev() {
+            historyOffset = Math.max(0, historyOffset - historyLimit);
+            refreshHistory();
+        }
+
+        function historyNext() {
+            historyOffset += historyLimit;
+            refreshHistory();
         }
 
         async function requeueFromHistory(index) {
