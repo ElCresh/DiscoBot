@@ -27,31 +27,31 @@ def validate_youtube_url(url: str) -> None:
 
 
 def extract_with_ytdlp(url: str) -> tuple[str, str, float | None]:
-    """Extract audio URL using yt-dlp. Returns (audio_url, title, duration)."""
+    """Extract muxed audio+video URL using yt-dlp. Returns (url, title, duration)."""
     import yt_dlp
 
     opts = {
-        "format": "bestaudio/best",
+        "format": "best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        audio_url = info["url"]
+        media_url = info["url"]
         title = info.get("title", "Unknown")
         duration = info.get("duration")
-        return audio_url, title, duration
+        return media_url, title, duration
 
 
 def extract_with_pytubefix(url: str) -> tuple[str, str, float | None]:
-    """Extract audio URL using pytubefix as fallback. Returns (audio_url, title, duration)."""
+    """Extract muxed audio+video URL using pytubefix as fallback. Returns (url, title, duration)."""
     from pytubefix import YouTube
 
     yt = YouTube(url)
-    stream = yt.streams.get_audio_only()
+    stream = yt.streams.get_highest_resolution()  # progressive: audio+video muxed
     if not stream:
-        raise RuntimeError("No audio stream found")
+        raise RuntimeError("No suitable stream found")
     title = yt.title or "Unknown"
     duration = yt.length
     return stream.url, title, float(duration) if duration else None
@@ -83,7 +83,7 @@ def search_youtube_audio(query: str) -> tuple[str, str, float | None]:
     import yt_dlp
 
     opts = {
-        "format": "bestaudio/best",
+        "format": "best[ext=mp4]/best",
         "quiet": True,
         "no_warnings": True,
         "extract_flat": False,
@@ -133,10 +133,9 @@ def search_youtube(query: str, limit: int = 5) -> list[dict]:
 
 
 def extract_audio_url(url: str) -> tuple[str, str, float | None]:
-    """Extract audio URL from YouTube link. Tries yt-dlp first, falls back to pytubefix.
+    """Extract muxed audio+video URL from YouTube link. Tries yt-dlp first, falls back to pytubefix.
 
-    Returns:
-        tuple of (audio_url, title, duration_in_seconds)
+    Returns (media_url, title, duration_in_seconds). VLC opens a video window automatically.
     """
     validate_youtube_url(url)
     try:
@@ -152,4 +151,4 @@ def extract_audio_url(url: str) -> tuple[str, str, float | None]:
         return result
     except Exception as e:
         logger.error(f"pytubefix also failed: {e}")
-        raise RuntimeError(f"Cannot extract audio from YouTube URL: {url}") from e
+        raise RuntimeError(f"Cannot extract from YouTube URL: {url}") from e
