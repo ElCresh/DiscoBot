@@ -267,6 +267,36 @@
             white-space: nowrap;
         }
         .upload-form button:hover { background: #c73650; }
+        .media-breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            background: #16213e;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+            color: #aaa;
+            flex-wrap: wrap;
+        }
+        .media-breadcrumb .crumb {
+            color: #ddd;
+            cursor: pointer;
+            text-decoration: none;
+            padding: 2px 4px;
+            border-radius: 4px;
+        }
+        .media-breadcrumb .crumb:hover { color: #fff; background: #0f3460; }
+        .media-breadcrumb .sep { color: #555; }
+        .media-list li.dir {
+            background: #0f3460;
+            cursor: pointer;
+            border-left: 3px solid #e94560;
+        }
+        .media-list li.dir:hover { background: #1f4068; }
+        .media-list li.dir span { font-weight: 600; color: #f0f0f0; }
+        .media-list li.dir span::before { content: "📁  "; }
+        .media-list li.file span::before { content: "🎵  "; opacity: 0.7; }
         .empty-media {
             text-align: center;
             color: #555;
@@ -566,12 +596,13 @@
                 </div>
                 <!-- Visibile solo quando type=local -->
                 <div id="localInput">
+                    <div class="media-breadcrumb" id="mediaBreadcrumb"></div>
                     <ul class="media-list" id="mediaList">
                         <li class="empty-media">Nessun file nella libreria</li>
                     </ul>
                     <div class="upload-form">
                         <input type="file" id="fileUpload" accept="audio/*,video/*">
-                        <button onclick="uploadFile()">Carica</button>
+                        <button onclick="uploadFile()">Carica qui</button>
                     </div>
                 </div>
                 <!-- Visibile solo quando type=spotify -->
@@ -757,27 +788,77 @@
             return res.json();
         }
 
+        let currentMediaPath = '';
+
+        function escapeAttr(s) {
+            return s.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        }
+
+        function renderMediaBreadcrumb(path) {
+            const crumbs = ['<span class="crumb" onclick="navigateMedia(\'\')">media</span>'];
+            const parts = path.split('/').filter(Boolean);
+            let acc = '';
+            parts.forEach((p, i) => {
+                acc = acc ? acc + '/' + p : p;
+                crumbs.push('<span class="sep">/</span>');
+                if (i === parts.length - 1) {
+                    crumbs.push(`<span style="color:#fff;">${p}</span>`);
+                } else {
+                    crumbs.push(`<span class="crumb" onclick="navigateMedia('${escapeAttr(acc)}')">${p}</span>`);
+                }
+            });
+            document.getElementById('mediaBreadcrumb').innerHTML = crumbs.join('');
+        }
+
         async function refreshMedia() {
             try {
-                const data = await api('/media/list');
+                const data = await api('/media/list?path=' + encodeURIComponent(currentMediaPath));
+                renderMediaBreadcrumb(data.path);
                 const list = document.getElementById('mediaList');
-                if (data.files.length === 0) {
-                    list.innerHTML = '<li class="empty-media">Nessun file nella libreria</li>';
-                } else {
-                    list.innerHTML = data.files.map(f =>
-                        `<li>
-                            <span>${f}</span>
-                            <button onclick="addMediaToQueue('${f.replace(/'/g, "\\'")}')">+</button>
+                const items = [];
+
+                if (data.parent !== null) {
+                    items.push(
+                        `<li class="dir" onclick="navigateMedia('${escapeAttr(data.parent)}')">
+                            <span>..</span>
                         </li>`
-                    ).join('');
+                    );
+                }
+                data.dirs.forEach(d => {
+                    const childPath = data.path ? data.path + '/' + d : d;
+                    items.push(
+                        `<li class="dir" onclick="navigateMedia('${escapeAttr(childPath)}')">
+                            <span>${d}</span>
+                        </li>`
+                    );
+                });
+                data.files.forEach(f => {
+                    const fullPath = data.path ? data.path + '/' + f : f;
+                    items.push(
+                        `<li class="file">
+                            <span>${f}</span>
+                            <button onclick="addMediaToQueue('${escapeAttr(fullPath)}')">+</button>
+                        </li>`
+                    );
+                });
+
+                if (items.length === 0) {
+                    list.innerHTML = '<li class="empty-media">Cartella vuota</li>';
+                } else {
+                    list.innerHTML = items.join('');
                 }
             } catch (e) {
                 console.error('Media refresh failed:', e);
             }
         }
 
-        async function addMediaToQueue(filename) {
-            await api('/queue/add-media/' + encodeURIComponent(filename), 'POST');
+        function navigateMedia(path) {
+            currentMediaPath = path || '';
+            refreshMedia();
+        }
+
+        async function addMediaToQueue(filepath) {
+            await api('/queue/add-media?path=' + encodeURIComponent(filepath), 'POST');
         }
 
         async function uploadFile() {
@@ -785,7 +866,10 @@
             if (!input.files.length) return;
             const formData = new FormData();
             formData.append('file', input.files[0]);
-            await fetch('/media/upload', { method: 'POST', body: formData });
+            await fetch('/media/upload?path=' + encodeURIComponent(currentMediaPath), {
+                method: 'POST',
+                body: formData
+            });
             input.value = '';
             refreshMedia();
         }

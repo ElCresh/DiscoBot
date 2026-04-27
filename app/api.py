@@ -220,25 +220,64 @@ def clear_history():
 
 # --- Media library ---
 
+def _resolve_media_path(rel: str, must_be_dir: bool = False) -> Path:
+    """Resolve a relative path inside MEDIA_DIR safely. Raises HTTP 400/404."""
+    base = MEDIA_DIR.resolve()
+    rel = (rel or "").strip().lstrip("/").lstrip("\\")
+    target = (base / rel).resolve() if rel else base
+    try:
+        target.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if must_be_dir and not target.is_dir():
+        raise HTTPException(status_code=404, detail="Directory not found")
+    return target
+
+
+def _parent_path(rel: str) -> str | None:
+    """Parent of a relative media path. None if already at root."""
+    rel = (rel or "").strip().strip("/").strip("\\")
+    if not rel:
+        return None
+    parent = Path(rel).parent.as_posix()
+    return "" if parent == "." else parent
+
+
 @app.get("/media/list")
-def list_media():
-    """List audio files in the media directory."""
-    files = sorted(
-        f.name for f in MEDIA_DIR.iterdir()
-        if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
-    )
-    return {"files": files}
+def list_media(path: str = ""):
+    """Browse a directory inside the media library.
+
+    Returns the directory's `dirs` and supported `files` (extension-filtered),
+    plus the current `path` and the `parent` path (None at root).
+    """
+    target = _resolve_media_path(path, must_be_dir=True)
+    dirs: list[str] = []
+    files: list[str] = []
+    for entry in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+        if entry.name.startswith("."):
+            continue
+        if entry.is_dir():
+            dirs.append(entry.name)
+        elif entry.is_file() and entry.suffix.lower() in MEDIA_EXTENSIONS:
+            files.append(entry.name)
+    return {
+        "path": path or "",
+        "parent": _parent_path(path),
+        "dirs": dirs,
+        "files": files,
+    }
 
 
 @app.post("/media/upload")
-async def upload_media(file: UploadFile = File(...)):
-    """Upload an audio file to the media directory."""
+async def upload_media(file: UploadFile = File(...), path: str = ""):
+    """Upload an audio file into a (sub)directory of the media library."""
     filename = Path(file.filename).name  # strip any directory components
     if ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     if not any(filename.lower().endswith(ext) for ext in MEDIA_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Unsupported audio format")
-    dest = MEDIA_DIR / filename
+    target_dir = _resolve_media_path(path, must_be_dir=True)
+    dest = target_dir / filename
     total_size = 0
     chunks = []
     while chunk := await file.read(1024 * 1024):  # 1 MB chunks
@@ -247,22 +286,17 @@ async def upload_media(file: UploadFile = File(...)):
             raise HTTPException(status_code=413, detail="File too large (max 100 MB)")
         chunks.append(chunk)
     dest.write_bytes(b"".join(chunks))
-    return {"filename": filename}
+    return {"filename": filename, "path": path or ""}
 
 
-@app.post("/queue/add-media/{filename}")
-def add_media_to_queue(filename: str):
-    """Add a file from the media library to the queue."""
-    # Sanitize: only allow a plain filename, no path traversal
-    if ".." in filename or "/" in filename or "\\" in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    filepath = (MEDIA_DIR / filename).resolve()
-    if not filepath.is_relative_to(MEDIA_DIR.resolve()):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    if not filepath.is_file():
+@app.post("/queue/add-media")
+def add_media_to_queue(path: str):
+    """Add a file from the media library to the queue. `path` is relative to MEDIA_DIR."""
+    target = _resolve_media_path(path)
+    if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found in media library")
     try:
-        return player.add_track(str(filepath), "local")
+        return player.add_track(str(target), "local")
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -343,11 +377,17 @@ async def unified_search(q: str, limit: int = 5):
     async def _search_local():
         lowq = query.lower()
         try:
-            return [
-                {"filename": f.name, "title": f.stem}
-                for f in sorted(MEDIA_DIR.iterdir())
-                if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS and lowq in f.name.lower()
-            ][:cap]
+            matches = []
+            for f in MEDIA_DIR.rglob("*"):
+                if not f.is_file() or f.suffix.lower() not in MEDIA_EXTENSIONS:
+                    continue
+                if lowq not in f.name.lower():
+                    continue
+                rel = f.relative_to(MEDIA_DIR).as_posix()
+                matches.append({"filename": rel, "title": f.stem})
+                if len(matches) >= cap:
+                    break
+            return matches
         except Exception:
             return []
 
