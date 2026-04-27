@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
 
+    # Presentation window (native Qt fullscreen)
+    presentation_monitor: int = 0
+
     model_config = {
         "env_prefix": "DISCOBOT_",
         "env_file": ".env",

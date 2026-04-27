@@ -57,22 +57,34 @@ def extract_with_pytubefix(url: str) -> tuple[str, str, float | None]:
     return stream.url, title, float(duration) if duration else None
 
 
-def extract_youtube_metadata(url: str) -> tuple[str, float | None]:
-    """Extract title and duration from a YouTube URL without resolving the audio stream URL.
+def extract_youtube_metadata(url: str) -> tuple[str, float | None, str | None]:
+    """Extract title, duration, and thumbnail URL from a YouTube URL.
 
-    Returns (title, duration).
+    Returns (title, duration, thumbnail_url).
     """
     validate_youtube_url(url)
     try:
-        _, title, duration = extract_with_ytdlp(url)
-        return title, duration
+        import yt_dlp
+        opts = {"quiet": True, "no_warnings": True, "extract_flat": False, "skip_download": True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return (
+                info.get("title", "Unknown"),
+                info.get("duration"),
+                info.get("thumbnail"),
+            )
     except Exception:
         pass
     try:
-        _, title, duration = extract_with_pytubefix(url)
-        return title, duration
+        from pytubefix import YouTube
+        yt = YouTube(url)
+        return (
+            yt.title or "Unknown",
+            float(yt.length) if yt.length else None,
+            yt.thumbnail_url,
+        )
     except Exception:
-        return "Unknown", None
+        return "Unknown", None, None
 
 
 def search_youtube_audio(query: str) -> tuple[str, str, float | None]:

@@ -28,6 +28,7 @@ class Track(BaseModel):
     duration: float | None = None  # seconds
     artist: str | None = None
     album: str | None = None
+    cover_url: str | None = None
 
 
 class HistoryEntry(BaseModel):

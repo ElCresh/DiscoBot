@@ -45,6 +45,7 @@ class ConnectionManager:
 
     def __init__(self):
         self._connections: list[asyncio.Queue] = []
+        self._sync_subscribers: list = []
         self._lock = threading.Lock()
 
     def subscribe(self) -> asyncio.Queue:
@@ -60,6 +61,16 @@ class ConnectionManager:
             except ValueError:
                 pass
 
+    def subscribe_sync(self, callback) -> None:
+        """Register an in-process callback invoked synchronously on every broadcast.
+
+        Used by the native presentation window to receive state updates without
+        going through a WebSocket. The callback runs on the broadcasting thread,
+        so it must be cheap (e.g. emit a Qt signal).
+        """
+        with self._lock:
+            self._sync_subscribers.append(callback)
+
     def broadcast(self, data: dict):
         with self._lock:
             for q in self._connections:
@@ -67,6 +78,12 @@ class ConnectionManager:
                     q.put_nowait(data)
                 except asyncio.QueueFull:
                     pass  # drop if consumer is too slow
+            subs = list(self._sync_subscribers)
+        for cb in subs:
+            try:
+                cb(data)
+            except Exception:
+                logger.debug("sync subscriber failed", exc_info=True)
 
 
 ws_manager = ConnectionManager()
@@ -87,6 +104,7 @@ class AudioPlayer:
         self._lock = threading.Lock()
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="discobot_midi_"))
         self._fluid = self._init_fluidsynth()
+        self._video_hwnd: int | None = None
 
         PLAYLISTS_DIR.mkdir(exist_ok=True)
 
@@ -288,7 +306,7 @@ class AudioPlayer:
             from app.spotify import build_youtube_search_query
             from app.youtube import search_youtube_audio
 
-            search_query, display_title, duration = build_youtube_search_query(path)
+            search_query, display_title, duration, _cover = build_youtube_search_query(path)
             audio_url, _, yt_duration = search_youtube_audio(search_query)
             return audio_url, display_title, duration or yt_duration
         elif track_type == TrackType.SOUNDCLOUD:
@@ -320,6 +338,9 @@ class AudioPlayer:
                 media.add_option(":norm-buff-size=20")
                 media.add_option(":norm-max-level=2.0")
             self._player.set_media(media)
+            if self._video_hwnd is not None:
+                # Reapply on every track — VLC sometimes drops the binding on media change.
+                self._player.set_hwnd(self._video_hwnd)
             self._player.play()
             self._player.audio_set_volume(self._volume)
             self._current = track
@@ -337,18 +358,19 @@ class AudioPlayer:
         # Resolve metadata before acquiring lock (network I/O)
         artist = None
         album = None
+        cover_url = None
         if track_type == TrackType.YOUTUBE:
             from app.youtube import extract_youtube_metadata
 
-            title, duration = extract_youtube_metadata(path)
+            title, duration, cover_url = extract_youtube_metadata(path)
         elif track_type == TrackType.SPOTIFY:
             from app.spotify import extract_spotify_metadata
 
-            title, duration = extract_spotify_metadata(path)
+            title, duration, cover_url = extract_spotify_metadata(path)
         elif track_type == TrackType.SOUNDCLOUD:
             from app.soundcloud import extract_soundcloud_metadata
 
-            title, duration = extract_soundcloud_metadata(path)
+            title, duration, cover_url = extract_soundcloud_metadata(path)
         else:
             title, artist, album = _read_local_metadata(path)
             duration = None
@@ -362,6 +384,7 @@ class AudioPlayer:
                 duration=duration,
                 artist=artist,
                 album=album,
+                cover_url=cover_url,
             )
             if self._current is None and not self._queue:
                 self._play_track(track)
@@ -470,6 +493,24 @@ class AudioPlayer:
             self._normalize = enabled
             self._save_state()
             self._broadcast_state()
+
+    def attach_video_window(self, hwnd: int):
+        """Bind VLC video output to a native window handle (HWND/XID/NSView).
+
+        Must be called once at startup, after the target widget is realized.
+        The handle is reapplied on every track change inside _play_track.
+        """
+        self._video_hwnd = hwnd
+        try:
+            self._player.set_hwnd(hwnd)
+        except Exception:
+            logger.exception("Failed to bind VLC video output to HWND %s", hwnd)
+
+    @property
+    def vlc_player(self):
+        """Underlying libvlc MediaPlayer. Exposed so the presentation window
+        can attach event listeners (e.g. MediaPlayerVout for video size)."""
+        return self._player
 
     def remove_track(self, track_id: int) -> bool:
         """Remove a track from the queue by ID."""

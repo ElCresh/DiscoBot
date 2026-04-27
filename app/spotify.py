@@ -49,23 +49,25 @@ def search_tracks(query: str, limit: int = 10) -> list[dict]:
     return tracks
 
 
-def extract_spotify_metadata(spotify_id: str) -> tuple[str, float | None]:
-    """Extract display title and duration from a Spotify track ID.
+def extract_spotify_metadata(spotify_id: str) -> tuple[str, float | None, str | None]:
+    """Extract display title, duration, and album art URL from a Spotify track ID.
 
-    Returns (display_title, duration_in_seconds).
+    Returns (display_title, duration_in_seconds, album_art_url).
     """
     sp = get_client()
     track = sp.track(spotify_id)
     artists = ", ".join(a["name"] for a in track["artists"])
     title = track["name"]
     duration = track["duration_ms"] / 1000.0
-    return f"{artists} - {title}", duration
+    images = track["album"].get("images") or []
+    cover = images[0]["url"] if images else None
+    return f"{artists} - {title}", duration, cover
 
 
-def build_youtube_search_query(spotify_id: str) -> tuple[str, str, float | None]:
+def build_youtube_search_query(spotify_id: str) -> tuple[str, str, float | None, str | None]:
     """Given a Spotify track ID, return a YouTube search query and metadata.
 
-    Returns (youtube_search_query, display_title, duration_in_seconds).
+    Returns (youtube_search_query, display_title, duration_in_seconds, album_art_url).
     """
     sp = get_client()
     track = sp.track(spotify_id)
@@ -74,4 +76,6 @@ def build_youtube_search_query(spotify_id: str) -> tuple[str, str, float | None]
     duration = track["duration_ms"] / 1000.0
     display_title = f"{artists} - {title}"
     search_query = f"{artists} - {title}"
-    return search_query, display_title, duration
+    images = track["album"].get("images") or []
+    cover = images[0]["url"] if images else None
+    return search_query, display_title, duration, cover

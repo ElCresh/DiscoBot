@@ -5,10 +5,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def extract_soundcloud_metadata(url: str) -> tuple[str, float | None]:
-    """Extract title and duration from a SoundCloud URL.
+def extract_soundcloud_metadata(url: str) -> tuple[str, float | None, str | None]:
+    """Extract title, duration, and thumbnail URL from a SoundCloud URL.
 
-    Returns (title, duration_in_seconds).
+    Returns (title, duration_in_seconds, thumbnail_url).
     """
     import yt_dlp
 
@@ -25,10 +25,14 @@ def extract_soundcloud_metadata(url: str) -> tuple[str, float | None]:
             if uploader:
                 title = f"{uploader} - {title}"
             duration = info.get("duration")
-            return title, float(duration) if duration else None
+            return (
+                title,
+                float(duration) if duration else None,
+                info.get("thumbnail"),
+            )
     except Exception:
         logger.warning(f"Failed to extract SoundCloud metadata: {url}")
-        return "Unknown", None
+        return "Unknown", None, None
 
 
 def extract_audio_url(url: str) -> tuple[str, str, float | None]:
