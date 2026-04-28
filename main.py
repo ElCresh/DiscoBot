@@ -1,9 +1,21 @@
 """DiscoBot - Remote-controlled audio player + native presentation kiosk."""
 
+import os
+# Silenzia libvlc prima che qualunque import lo inizializzi.
+os.environ.setdefault("VLC_VERBOSE", "-1")
+
+print("Avvio in corso...", flush=True)
+
 import logging
 import signal
+import socket
 import sys
 import threading
+
+# Flag --debug da CLI: rimosso da argv prima di passarlo a Qt per pulizia.
+_DEBUG_CLI = "--debug" in sys.argv
+if _DEBUG_CLI:
+    sys.argv.remove("--debug")
 
 import uvicorn
 from PySide6.QtCore import QTimer
@@ -11,8 +23,25 @@ from PySide6.QtWidgets import QApplication
 
 from app.config import settings
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+DEBUG = _DEBUG_CLI or settings.debug
+
+logging.basicConfig(
+    level=logging.INFO if DEBUG else logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
+
+
+def _local_ip() -> str:
+    """IP della scheda di rete usata per uscire verso Internet."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
 
 
 def _run_server():
@@ -20,7 +49,7 @@ def _run_server():
         "app.api:app",
         host=settings.host,
         port=settings.port,
-        log_level="info",
+        log_level="info" if DEBUG else "warning",
     )
 
 
@@ -49,7 +78,13 @@ if __name__ == "__main__":
     heartbeat.timeout.connect(lambda: None)
 
     threading.Thread(target=_run_server, daemon=True).start()
-    logger.info("DiscoBot up — server on http://%s:%s, presentation on monitor %s",
-                settings.host, settings.port, settings.presentation_monitor)
+    lan_ip = _local_ip()
+    print(
+        f"DiscoBot pronto — http://{settings.host}:{settings.port} "
+        f"(LAN: http://{lan_ip}:{settings.port}), "
+        f"presentazione su monitor {settings.presentation_monitor}"
+        + (" [DEBUG]" if DEBUG else ""),
+        flush=True,
+    )
 
     sys.exit(qt_app.exec())

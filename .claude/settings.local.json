@@ -10,7 +10,15 @@
       "Bash(python:*)",
       "Bash(git log:*)",
       "Bash(grep:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "PowerShell(py *)",
+      "PowerShell(New-Item *)",
+      "WebFetch(domain:www.schristiancollins.com)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.schristiancollins.com/generaluser\" -UseBasicParsing -TimeoutSec 30; \"STATUS: $\\($r.StatusCode\\)\"; \"LENGTH: $\\($r.Content.Length\\)\"; $r.Links | Where-Object { $_.href -match '\\\\.zip|\\\\.sf2|GeneralUser' } | Select-Object href, outerHTML -First 20 | Format-List } catch { \"ERROR: $\\($_.Exception.Message\\)\" })",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.schristiancollins.com/generaluser\" -UseBasicParsing -TimeoutSec 30; $r.Content } catch { \"ERROR: $\\($_.Exception.Message\\)\" })",
+      "WebFetch(domain:musical-artifacts.com)",
+      "WebFetch(domain:www.google.com)",
+      "WebFetch(domain:duckduckgo.com)"
     ]
   }
 }

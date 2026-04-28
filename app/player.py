@@ -91,7 +91,7 @@ ws_manager = ConnectionManager()
 
 class AudioPlayer:
     def __init__(self):
-        self._instance = vlc.Instance()
+        self._instance = vlc.Instance(["--quiet", "--no-video-title-show"])
         self._player: vlc.MediaPlayer = self._instance.media_player_new()
         self._queue: list[Track] = []
         self._current: Track | None = None
