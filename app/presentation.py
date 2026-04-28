@@ -41,7 +41,8 @@ QLabel#title { color: #e94560; font-size: 32pt; font-weight: 700; }
 QLabel#artist { color: #ddd; font-size: 16pt; }
 QLabel#progress { color: #aaa; font-size: 18pt; font-weight: 600; }
 QLabel#qrcode { background-color: white; border-radius: 6px; padding: 3px; }
-QLabel#clock { color: #aaa; font-size: 72pt; font-weight: 300; }
+QLabel#brand { color: #e94560; font-size: 84pt; font-weight: 900; }
+QLabel#clock { color: #aaa; font-size: 56pt; font-weight: 300; }
 QListWidget { background-color: #0f3460; border: none; border-radius: 12px; padding: 8px; font-size: 14pt; }
 QListWidget::item { padding: 10px; border-bottom: 1px solid #16213e; }
 QListWidget::item:last { border-bottom: none; }
@@ -253,6 +254,11 @@ class PresentationWindow(QMainWindow):
         idle_widget = QWidget()
         idle_layout = QVBoxLayout(idle_widget)
         idle_layout.setAlignment(Qt.AlignCenter)
+        idle_layout.setSpacing(0)
+        self._idle_brand = QLabel("DiscoBot")
+        self._idle_brand.setObjectName("brand")
+        self._idle_brand.setAlignment(Qt.AlignCenter)
+        idle_layout.addWidget(self._idle_brand)
         self._idle_clock = QLabel("--:--")
         self._idle_clock.setObjectName("clock")
         self._idle_clock.setAlignment(Qt.AlignCenter)

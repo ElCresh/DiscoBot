@@ -21,6 +21,7 @@ SOUNDFONTS_DIR = Path("soundfonts")
 STATE_FILE = Path("state.json")
 PLAYLISTS_DIR = Path("playlists")
 MAX_HISTORY = 10000  # safety cap on stored entries; UI paginates the display
+COVER_PRUNE_INTERVAL_S = 30 * 60  # 30min — orphan cover-cache sweep cadence
 
 
 def _find_soundfont() -> Path | None:
@@ -135,8 +136,16 @@ class AudioPlayer:
 
         atexit.register(self._atexit_save)
 
+        # One-shot prune at startup to clean cruft accumulated while offline.
+        try:
+            self._prune_cover_cache()
+        except Exception:
+            logger.exception("Initial cover cache prune failed")
+
         save_thread = threading.Thread(target=self._periodic_save, daemon=True)
         save_thread.start()
+        prune_thread = threading.Thread(target=self._periodic_prune, daemon=True)
+        prune_thread.start()
 
     def _save_state(self):
         """Serialize player state to JSON. Must be called inside _lock."""
@@ -212,6 +221,38 @@ class AudioPlayer:
                 self._save_state()
         except Exception:
             pass
+
+    def _prune_cover_cache(self):
+        """Delete coverart_cache/ files not referenced by current/queue/history."""
+        from app.coverart import cache_filename_for, prune_orphans
+
+        keep: set[str] = set()
+        with self._lock:
+            tracks: list[Track] = []
+            if self._current is not None:
+                tracks.append(self._current)
+            tracks.extend(self._queue)
+            for h in self._history:
+                try:
+                    tracks.append(Track(**h["track"]))
+                except Exception:
+                    continue
+        for t in tracks:
+            n = cache_filename_for(t)
+            if n:
+                keep.add(n)
+        removed = prune_orphans(keep)
+        if removed:
+            logger.info("Pruned %d orphan cover(s) from coverart_cache/", removed)
+
+    def _periodic_prune(self):
+        """Background thread: orphan-prune the cover cache every 30 minutes."""
+        while True:
+            time.sleep(COVER_PRUNE_INTERVAL_S)
+            try:
+                self._prune_cover_cache()
+            except Exception:
+                logger.exception("Periodic cover cache prune failed")
 
     def _next_id(self) -> int:
         self._track_counter += 1

@@ -77,6 +77,50 @@ def download_remote_cover(url: str) -> str | None:
         return None
 
 
+def clear_cache() -> int:
+    """Wipe all cached cover images. Returns number of files removed."""
+    if not CACHE_DIR.is_dir():
+        return 0
+    removed = 0
+    for f in CACHE_DIR.iterdir():
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            logger.warning("Failed to remove cache file %s", f, exc_info=True)
+    return removed
+
+
+def cache_filename_for(track) -> str | None:
+    """Cache filename a track's cover would resolve to, or None if it has none.
+    Mirrors the naming scheme of extract_local_cover / download_remote_cover."""
+    from app.models import TrackType
+
+    if track is None:
+        return None
+    if track.type == TrackType.LOCAL:
+        return f"local_{_cache_key(track.path)}.img"
+    if track.cover_url:
+        return f"remote_{_cache_key(track.cover_url)}.img"
+    return None
+
+
+def prune_orphans(keep: set[str]) -> int:
+    """Delete cached files whose basename isn't in `keep`. Returns count removed."""
+    if not CACHE_DIR.is_dir():
+        return 0
+    removed = 0
+    for f in CACHE_DIR.iterdir():
+        if f.name in keep:
+            continue
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            logger.warning("Failed to remove orphan cache file %s", f, exc_info=True)
+    return removed
+
+
 def resolve_cover_for(track) -> str | None:
     """Return a local image path for the given track, or None if no cover is available."""
     from app.models import TrackType

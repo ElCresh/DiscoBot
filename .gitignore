@@ -4,6 +4,9 @@ media/
 # SoundFonts (binary, user-provided)
 soundfonts/
 
+# Cover art cache (downloaded album art, may be copyrighted)
+coverart_cache/
+
 # Python
 __pycache__/
 *.py[cod]

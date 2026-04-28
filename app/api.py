@@ -175,6 +175,16 @@ def clear_queue():
     return {"status": "cleared"}
 
 
+# --- Cover art cache ---
+
+@app.delete("/coverart_cache")
+def clear_coverart_cache():
+    """Clear all cached cover images. They will be re-fetched on next play."""
+    from app.coverart import clear_cache
+    removed = clear_cache()
+    return {"status": "cleared", "removed": removed}
+
+
 # --- History ---
 
 @app.get("/history")
