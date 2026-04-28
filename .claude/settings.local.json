@@ -18,7 +18,9 @@
       "PowerShell(try { $r = Invoke-WebRequest -Uri \"https://www.schristiancollins.com/generaluser\" -UseBasicParsing -TimeoutSec 30; $r.Content } catch { \"ERROR: $\\($_.Exception.Message\\)\" })",
       "WebFetch(domain:musical-artifacts.com)",
       "WebFetch(domain:www.google.com)",
-      "WebFetch(domain:duckduckgo.com)"
+      "WebFetch(domain:duckduckgo.com)",
+      "PowerShell(Get-ChildItem -Path \"tools\\\\fluidsynth\" -Recurse | ForEach-Object { $_.FullName.Substring\\(\\(Resolve-Path .\\).Path.Length + 1\\) + \" \\($\\([math]::Round\\($_.Length/1KB,1\\)\\) KB\\)\" })",
+      "PowerShell(Remove-Item *)"
     ]
   }
 }

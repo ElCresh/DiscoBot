@@ -6,8 +6,6 @@ import json
 import logging
 import os
 import random
-import shutil
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -19,11 +17,18 @@ from app.youtube import extract_audio_url
 
 logger = logging.getLogger(__name__)
 
-MIDI_EXTENSIONS = {".mid", ".midi"}
 SOUNDFONTS_DIR = Path("soundfonts")
 STATE_FILE = Path("state.json")
 PLAYLISTS_DIR = Path("playlists")
 MAX_HISTORY = 10000  # safety cap on stored entries; UI paginates the display
+
+
+def _find_soundfont() -> Path | None:
+    """Primo .sf2 in soundfonts/ in ordine alfabetico, o None se assente."""
+    if not SOUNDFONTS_DIR.is_dir():
+        return None
+    sfs = sorted(SOUNDFONTS_DIR.glob("*.sf2"))
+    return sfs[0] if sfs else None
 
 
 def _read_local_metadata(filepath: str) -> tuple[str, str | None, str | None]:
@@ -91,7 +96,21 @@ ws_manager = ConnectionManager()
 
 class AudioPlayer:
     def __init__(self):
-        self._instance = vlc.Instance(["--quiet", "--no-video-title-show"])
+        # MIDI playback: VLC's built-in fluidsynth plugin reads --soundfont and
+        # decodes .mid files natively. No external binary or Python wrapper needed.
+        # Linux: requires `vlc-plugin-fluidsynth` (or equivalent). Windows/macOS:
+        # bundled in the official VLC build.
+        vlc_args = ["--quiet", "--no-video-title-show"]
+        sf = _find_soundfont()
+        if sf is not None:
+            vlc_args.append(f"--soundfont={sf.resolve()}")
+            logger.info(f"Using SoundFont: {sf}")
+        else:
+            logger.warning(
+                "No .sf2 SoundFont found in soundfonts/ — MIDI playback may be silent. "
+                "Drop a GM SoundFont (e.g. GeneralUser-GS.sf2) into soundfonts/."
+            )
+        self._instance = vlc.Instance(vlc_args)
         self._player: vlc.MediaPlayer = self._instance.media_player_new()
         self._queue: list[Track] = []
         self._current: Track | None = None
@@ -102,8 +121,6 @@ class AudioPlayer:
         self._repeat = RepeatMode.OFF
         self._normalize = True
         self._lock = threading.Lock()
-        self._tmp_dir = Path(tempfile.mkdtemp(prefix="discobot_midi_"))
-        self._fluid = self._init_fluidsynth()
         self._video_hwnd: int | None = None
 
         PLAYLISTS_DIR.mkdir(exist_ok=True)
@@ -116,46 +133,10 @@ class AudioPlayer:
         events = self._player.event_manager()
         events.event_attach(vlc.EventType.MediaPlayerEndReached, self._on_track_end)
 
-        atexit.register(self._cleanup_tmp)
         atexit.register(self._atexit_save)
 
         save_thread = threading.Thread(target=self._periodic_save, daemon=True)
         save_thread.start()
-
-    @staticmethod
-    def _init_fluidsynth():
-        """Try to initialize FluidSynth with the first available SoundFont."""
-        try:
-            from midi2audio import FluidSynth
-        except ImportError:
-            logger.warning("midi2audio not installed — MIDI playback disabled")
-            return None
-
-        sf_files = sorted(SOUNDFONTS_DIR.glob("*.sf2")) if SOUNDFONTS_DIR.is_dir() else []
-        if not sf_files:
-            logger.warning(
-                "No .sf2 SoundFont found in soundfonts/ — MIDI playback disabled. "
-                "Download a GM SoundFont (e.g. FluidR3_GM.sf2) and place it there."
-            )
-            return None
-
-        logger.info(f"Using SoundFont: {sf_files[0]}")
-        return FluidSynth(str(sf_files[0]))
-
-    def _convert_midi(self, midi_path: Path) -> str:
-        """Convert a MIDI file to WAV via FluidSynth. Returns path to WAV."""
-        if self._fluid is None:
-            raise RuntimeError(
-                "MIDI playback requires midi2audio + a .sf2 SoundFont in soundfonts/"
-            )
-        wav_path = self._tmp_dir / (midi_path.stem + ".wav")
-        self._fluid.midi_to_audio(str(midi_path), str(wav_path))
-        logger.info(f"Converted MIDI → WAV: {wav_path}")
-        return str(wav_path)
-
-    def _cleanup_tmp(self):
-        """Remove temporary converted files."""
-        shutil.rmtree(self._tmp_dir, ignore_errors=True)
 
     def _save_state(self):
         """Serialize player state to JSON. Must be called inside _lock."""
@@ -317,10 +298,6 @@ class AudioPlayer:
             p = Path(path)
             if not p.exists():
                 raise FileNotFoundError(f"File not found: {path}")
-            # MIDI files need conversion to WAV for reliable VLC playback
-            if p.suffix.lower() in MIDI_EXTENSIONS:
-                wav_path = self._convert_midi(p)
-                return wav_path, p.stem, None
             return str(p.resolve()), p.stem, None
 
     def _play_track(self, track: Track):
