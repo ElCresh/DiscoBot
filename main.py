@@ -25,10 +25,25 @@ from app.config import settings
 
 DEBUG = _DEBUG_CLI or settings.debug
 
-logging.basicConfig(
-    level=logging.INFO if DEBUG else logging.WARNING,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+# Use uvicorn's DefaultFormatter at the root so our app logs share the look
+# of uvicorn's HTTP/lifecycle lines ("LEVEL:   message", with TTY colors).
+import uvicorn.logging
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(uvicorn.logging.DefaultFormatter(
+    fmt="%(levelprefix)s %(name)s: %(message)s",
+    use_colors=None,  # auto-detect TTY
+))
+_root = logging.getLogger()
+_root.setLevel(logging.DEBUG if DEBUG else logging.WARNING)
+for _h in list(_root.handlers):
+    _root.removeHandler(_h)
+_root.addHandler(_handler)
+
+# Silence chatty third-party loggers even at DEBUG level — they don't help
+# debug *our* code and would drown the useful traces.
+for noisy in ("asyncio", "urllib3", "httpx", "httpcore", "yt_dlp", "websockets"):
+    logging.getLogger(noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -45,21 +60,39 @@ def _local_ip() -> str:
 
 
 def _run_server():
+    # log_config=None tells uvicorn NOT to install its own logging config,
+    # so its loggers (uvicorn, uvicorn.access, uvicorn.error) inherit the
+    # root config we set above — same timestamp/level/name format as ours.
     uvicorn.run(
         "app.api:app",
         host=settings.host,
         port=settings.port,
         log_level="info" if DEBUG else "warning",
+        log_config=None,
     )
 
 
 if __name__ == "__main__":
+    # Windows: tell the shell this is a distinct app, not just python.exe.
+    # Without this, the taskbar groups our window under Python's icon and
+    # ignores setWindowIcon. Must run before QApplication.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "DiscoBot.Presenter"
+            )
+        except Exception:
+            logger.debug("Failed to set AppUserModelID", exc_info=True)
+
     qt_app = QApplication(sys.argv)
 
     # Import after QApplication exists. app.api creates the AudioPlayer at import time;
     # we then attach the video widget once the window is shown.
     from app.api import player
-    from app.presentation import PresentationWindow
+    from app.presentation import PresentationWindow, make_app_icon
+
+    qt_app.setWindowIcon(make_app_icon())
 
     window = PresentationWindow(player, monitor=settings.presentation_monitor)
     window.show_on_target_monitor()

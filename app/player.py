@@ -224,7 +224,7 @@ class AudioPlayer:
 
     def _prune_cover_cache(self):
         """Delete coverart_cache/ files not referenced by current/queue/history."""
-        from app.coverart import cache_filename_for, prune_orphans
+        from app.coverart import cache_filename_for, prune_orphans, video_cache_filename_for
 
         keep: set[str] = set()
         with self._lock:
@@ -241,6 +241,9 @@ class AudioPlayer:
             n = cache_filename_for(t)
             if n:
                 keep.add(n)
+            v = video_cache_filename_for(t)
+            if v:
+                keep.add(v)
         removed = prune_orphans(keep)
         if removed:
             logger.info("Pruned %d orphan cover(s) from coverart_cache/", removed)
@@ -306,6 +309,7 @@ class AudioPlayer:
                     duration=self._current.duration,
                     artist=self._current.artist,
                     album=self._current.album,
+                    cover_url=self._current.cover_url,
                 )
                 self._queue.append(recycled)
 
@@ -454,6 +458,7 @@ class AudioPlayer:
                     duration=self._current.duration,
                     artist=self._current.artist,
                     album=self._current.album,
+                    cover_url=self._current.cover_url,
                 )
                 self._queue.append(recycled)
 
@@ -601,6 +606,7 @@ class AudioPlayer:
                 duration=original.duration,
                 artist=original.artist,
                 album=original.album,
+                cover_url=original.cover_url,
             )
             if self._current is None and not self._queue:
                 self._play_track(track)
@@ -693,6 +699,7 @@ class AudioPlayer:
                     duration=t.get("duration"),
                     artist=t.get("artist"),
                     album=t.get("album"),
+                    cover_url=t.get("cover_url"),
                 )
                 new_tracks.append(track)
 

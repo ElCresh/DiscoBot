@@ -20,7 +20,15 @@
       "WebFetch(domain:www.google.com)",
       "WebFetch(domain:duckduckgo.com)",
       "PowerShell(Get-ChildItem -Path \"tools\\\\fluidsynth\" -Recurse | ForEach-Object { $_.FullName.Substring\\(\\(Resolve-Path .\\).Path.Length + 1\\) + \" \\($\\([math]::Round\\($_.Length/1KB,1\\)\\) KB\\)\" })",
-      "PowerShell(Remove-Item *)"
+      "PowerShell(Remove-Item *)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot status --short)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot log --oneline -5)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot diff HEAD -- app/coverart.py)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot diff HEAD -- app/presentation.py)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot show HEAD:app/presentation.py)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot diff HEAD -- app/player.py)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot log --oneline --all -- app/models.py)",
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot log --oneline -p --all -- app/models.py)"
     ]
   }
 }
