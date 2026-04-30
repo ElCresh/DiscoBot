@@ -28,7 +28,11 @@
       "Bash(git -C C:/Users/Utente/Desktop/DiscoBot show HEAD:app/presentation.py)",
       "Bash(git -C C:/Users/Utente/Desktop/DiscoBot diff HEAD -- app/player.py)",
       "Bash(git -C C:/Users/Utente/Desktop/DiscoBot log --oneline --all -- app/models.py)",
-      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot log --oneline -p --all -- app/models.py)"
+      "Bash(git -C C:/Users/Utente/Desktop/DiscoBot log --oneline -p --all -- app/models.py)",
+      "Bash(pip show *)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:pypi.org)",
+      "WebFetch(domain:api.github.com)"
     ]
   }
 }

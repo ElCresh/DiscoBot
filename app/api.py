@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.config import settings
 from app.models import TrackRequest, Track, PlayerState, HistoryEntry, RepeatMode
@@ -459,6 +459,68 @@ def spotify_status():
     """Check if Spotify integration is configured."""
     configured = bool(settings.spotify_client_id and settings.spotify_client_secret)
     return {"configured": configured}
+
+
+@app.get("/spotify/auth-status")
+def spotify_auth_status():
+    """Auth + Zeroconf bootstrap state, polled by the Settings panel."""
+    from app.spotify_audio import get_audio, get_zeroconf
+    audio = get_audio()
+    return {
+        "authenticated": audio.is_authenticated(),
+        "session_status": audio.session_status,  # idle | warming | ready | failed
+        "zeroconf": get_zeroconf().status(),
+    }
+
+
+@app.post("/spotify/zeroconf/start")
+def spotify_zeroconf_start(device_name: str = "DiscoBot"):
+    """Expose DiscoBot as a Spotify Connect device for remote login.
+
+    The operator opens the Spotify app on a LAN-connected phone, picks the
+    advertised device, and credentials are captured + persisted automatically.
+    Idempotent: calling while already running returns the current status.
+    """
+    from app.spotify_audio import get_audio, get_zeroconf
+
+    if get_audio().is_authenticated():
+        raise HTTPException(
+            status_code=409,
+            detail="Already authenticated. Delete the credentials file to re-login.",
+        )
+    try:
+        return get_zeroconf().start(device_name=device_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Zeroconf start failed: {e}")
+
+
+@app.post("/spotify/zeroconf/stop")
+def spotify_zeroconf_stop():
+    """Manual cancel of the Zeroconf bootstrap."""
+    from app.spotify_audio import get_zeroconf
+    return get_zeroconf().stop()
+
+
+@app.get("/spotify/stream/{track_id}")
+def spotify_stream(track_id: str):
+    """Stream a Spotify track as OGG/Vorbis. Loopback-only consumer (VLC)."""
+    from app.spotify_audio import get_audio
+
+    audio = get_audio()
+    if not audio.is_authenticated():
+        raise HTTPException(
+            status_code=401,
+            detail="Spotify not authenticated. Run: python main.py --spotify-login",
+        )
+    try:
+        generator = audio.open_track_stream(track_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        # The load failed even after the stale-session retry — surface a clean
+        # 502 to VLC; the player layer will then trigger its own retry policy.
+        raise HTTPException(status_code=502, detail=f"Spotify stream failed: {e}")
+    return StreamingResponse(generator, media_type="audio/ogg")
 
 
 @app.get("/spotify/search")

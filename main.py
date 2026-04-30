@@ -17,6 +17,13 @@ _DEBUG_CLI = "--debug" in sys.argv
 if _DEBUG_CLI:
     sys.argv.remove("--debug")
 
+# One-shot Spotify OAuth: esegue il flow nel browser, persiste le credenziali
+# librespot e termina senza avviare GUI/server.
+if "--spotify-login" in sys.argv:
+    from app.spotify_audio import bootstrap_login
+    bootstrap_login()
+    sys.exit(0)
+
 import uvicorn
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
@@ -111,6 +118,14 @@ if __name__ == "__main__":
     heartbeat.timeout.connect(lambda: None)
 
     threading.Thread(target=_run_server, daemon=True).start()
+
+    # Pre-warm the Spotify librespot session in background so the first play
+    # doesn't pay the AP handshake latency. Status is exposed via
+    # /spotify/auth-status (session_status: idle|warming|ready|failed) and
+    # surfaced in the web UI as a yellow pulsing dot until ready.
+    from app.spotify_audio import get_audio as _get_spotify_audio
+    threading.Thread(target=_get_spotify_audio().prewarm, daemon=True).start()
+
     lan_ip = _local_ip()
     print(
         f"DiscoBot pronto — http://{settings.host}:{settings.port} "

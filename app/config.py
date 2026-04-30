@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     # Spotify (optional — leave empty to disable)
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
+    # Persisted librespot credentials, written by `--spotify-login` and reused
+    # by the streaming session. Path relative to CWD.
+    spotify_credentials_file: str = ".spotify_credentials.json"
 
     # Presentation window (native Qt fullscreen)
     presentation_monitor: int = 0

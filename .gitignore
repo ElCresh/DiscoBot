@@ -22,3 +22,7 @@ state.json
 
 # Environment
 .env
+
+# Spotify librespot session credentials
+.spotify_credentials.json
+credentials.json

@@ -22,6 +22,15 @@ STATE_FILE = Path("state.json")
 PLAYLISTS_DIR = Path("playlists")
 MAX_HISTORY = 10000  # safety cap on stored entries; UI paginates the display
 COVER_PRUNE_INTERVAL_S = 30 * 60  # 30min — orphan cover-cache sweep cadence
+# Retry policy for failed playback start: try the same track up to 3 times
+# (covers transient network/Spotify hiccups), then advance to next.
+PLAY_MAX_ATTEMPTS = 3
+PLAY_RETRY_DELAY_S = 1.0
+# Watchdog: if a track set_media+play() doesn't reach Playing state within
+# this many seconds, treat it as stuck and trigger the retry policy. Streamed
+# sources (Spotify, YouTube) usually need a couple seconds to buffer; 15s is
+# generous enough to avoid false positives but tight enough not to hang a set.
+PLAY_WATCHDOG_S = 15.0
 
 
 def _find_soundfont() -> Path | None:
@@ -123,6 +132,10 @@ class AudioPlayer:
         self._normalize = True
         self._lock = threading.Lock()
         self._video_hwnd: int | None = None
+        # Retry bookkeeping for the currently-playing track. Keyed by track.id
+        # so a watchdog firing after a skip doesn't retry the wrong track.
+        self._play_attempts: dict[int, int] = {}
+        self._play_watchdog: threading.Timer | None = None
 
         PLAYLISTS_DIR.mkdir(exist_ok=True)
 
@@ -130,9 +143,12 @@ class AudioPlayer:
 
         self._player.audio_set_volume(self._volume)
 
-        # Listen for track end to auto-advance
+        # Listen for track end to auto-advance, and for hard errors so the
+        # retry policy kicks in instead of leaving the player in limbo.
         events = self._player.event_manager()
         events.event_attach(vlc.EventType.MediaPlayerEndReached, self._on_track_end)
+        events.event_attach(vlc.EventType.MediaPlayerEncounteredError, self._on_player_error)
+        events.event_attach(vlc.EventType.MediaPlayerPlaying, self._on_player_playing)
 
         atexit.register(self._atexit_save)
 
@@ -286,6 +302,104 @@ class AudioPlayer:
         """Called when a track finishes playing. Advances to next in queue."""
         threading.Thread(target=self._advance_on_end, daemon=True).start()
 
+    def _on_player_error(self, event):
+        """VLC failed to load/decode the current media — trigger retry policy."""
+        threading.Thread(target=self._handle_play_failure_async, daemon=True).start()
+
+    def _on_player_playing(self, event):
+        """VLC reached Playing state — clear watchdog and retry counter."""
+        self._cancel_watchdog()
+        cur = self._current
+        if cur is not None:
+            self._play_attempts.pop(cur.id, None)
+
+    def _cancel_watchdog(self) -> None:
+        if self._play_watchdog is not None:
+            self._play_watchdog.cancel()
+            self._play_watchdog = None
+
+    def _arm_watchdog(self, track_id: int) -> None:
+        """Schedule a stuck-loading check for a specific track."""
+        self._cancel_watchdog()
+        t = threading.Timer(PLAY_WATCHDOG_S, self._on_watchdog_fired, args=(track_id,))
+        t.daemon = True
+        self._play_watchdog = t
+        t.start()
+
+    def _on_watchdog_fired(self, track_id: int) -> None:
+        """Track set_media+play() didn't reach Playing in time — likely stuck."""
+        with self._lock:
+            cur = self._current
+            if cur is None or cur.id != track_id:
+                return  # already moved on
+            try:
+                state = self._player.get_state()
+            except Exception:
+                state = None
+            if state == vlc.State.Playing:
+                return  # got there in time
+            logger.warning(
+                "Watchdog: track %d stuck in state %s after %.0fs, retrying",
+                track_id, state, PLAY_WATCHDOG_S,
+            )
+            self._handle_play_failure_locked(cur)
+
+    def _handle_play_failure_async(self) -> None:
+        """Entry point from VLC error event — acquires the lock then retries."""
+        with self._lock:
+            cur = self._current
+            if cur is None:
+                return
+            self._handle_play_failure_locked(cur)
+
+    def _handle_play_failure_locked(self, track: Track) -> None:
+        """Retry the same track up to PLAY_MAX_ATTEMPTS, then skip to next.
+
+        Must be called with self._lock held.
+        """
+        attempts = self._play_attempts.get(track.id, 0) + 1
+        self._play_attempts[track.id] = attempts
+        try:
+            self._player.stop()
+        except Exception:
+            pass
+        self._cancel_watchdog()
+
+        if attempts < PLAY_MAX_ATTEMPTS:
+            logger.warning(
+                "Track %s failed (attempt %d/%d), retrying in %.1fs",
+                track.title, attempts, PLAY_MAX_ATTEMPTS, PLAY_RETRY_DELAY_S,
+            )
+            threading.Timer(
+                PLAY_RETRY_DELAY_S, self._retry_play, args=(track,),
+            ).start()
+            return
+
+        # Out of attempts: mark as failed, advance.
+        logger.error(
+            "Track %s failed after %d attempts, skipping",
+            track.title, PLAY_MAX_ATTEMPTS,
+        )
+        self._play_attempts.pop(track.id, None)
+        self._record_history()
+        self._current = None
+        if self._queue:
+            idx = random.randrange(len(self._queue)) if self._shuffle else 0
+            next_track = self._queue.pop(idx)
+            self._play_track(next_track)
+        self._save_state()
+        self._broadcast_state()
+
+    def _retry_play(self, track: Track) -> None:
+        """Re-issue _play_track for a failed attempt. Acquires the lock."""
+        with self._lock:
+            # Only retry if still the current focus (user might have skipped)
+            if self._current is None or self._current.id != track.id:
+                # User moved on; clear bookkeeping and let the new flow run
+                self._play_attempts.pop(track.id, None)
+                return
+            self._play_track(track)
+
     def _advance_on_end(self):
         """Handle track end: respect repeat mode, then advance."""
         with self._lock:
@@ -329,12 +443,17 @@ class AudioPlayer:
         if track_type == TrackType.YOUTUBE:
             return extract_audio_url(path)
         elif track_type == TrackType.SPOTIFY:
-            from app.spotify import build_youtube_search_query
-            from app.youtube import search_youtube_audio
+            from app.config import settings
+            from app.spotify import extract_spotify_metadata
 
-            search_query, display_title, duration, _cover = build_youtube_search_query(path)
-            audio_url, _, yt_duration = search_youtube_audio(search_query)
-            return audio_url, display_title, duration or yt_duration
+            # Return only the song title (no artist prefix): _play_track will
+            # overwrite track.title with this, and we don't want to clobber
+            # the separate track.artist field set during add_track.
+            title, _artist, _album, duration, _cover = extract_spotify_metadata(path)
+            # VLC opens this loopback URL; the FastAPI endpoint streams OGG
+            # bytes decrypted by librespot. Same uvicorn process serves it.
+            stream_url = f"http://127.0.0.1:{settings.port}/spotify/stream/{path}"
+            return stream_url, title, duration
         elif track_type == TrackType.SOUNDCLOUD:
             from app.soundcloud import extract_audio_url as sc_extract
 
@@ -346,7 +465,9 @@ class AudioPlayer:
             return str(p.resolve()), p.stem, None
 
     def _play_track(self, track: Track):
-        """Start playing a specific track."""
+        """Start playing a specific track. Sync errors and a stuck-loading
+        watchdog both feed into the retry policy (`_handle_play_failure_locked`).
+        """
         try:
             playable_url, title, duration = self._resolve_track(track.path, track.type)
             track.title = title
@@ -366,14 +487,15 @@ class AudioPlayer:
             self._player.play()
             self._player.audio_set_volume(self._volume)
             self._current = track
+            self._arm_watchdog(track.id)
             logger.info(f"Now playing: {track.title}")
         except Exception as e:
-            logger.error(f"Failed to play track: {e}")
-            self._current = None
-            # Try next track if available
-            if self._queue:
-                next_track = self._queue.pop(0)
-                self._play_track(next_track)
+            # Synchronous failure (e.g. _resolve_track raised). Funnel into the
+            # same retry policy as VLC's async error event so we don't end up
+            # in the half-dead state the user reported.
+            logger.error(f"Failed to play track {track.title!r}: {e}")
+            self._current = track
+            self._handle_play_failure_locked(track)
 
     def add_track(self, path: str, track_type: TrackType) -> Track:
         """Add a track to the queue. Starts playing if nothing is playing."""
@@ -388,7 +510,7 @@ class AudioPlayer:
         elif track_type == TrackType.SPOTIFY:
             from app.spotify import extract_spotify_metadata
 
-            title, duration, cover_url = extract_spotify_metadata(path)
+            title, artist, album, duration, cover_url = extract_spotify_metadata(path)
         elif track_type == TrackType.SOUNDCLOUD:
             from app.soundcloud import extract_soundcloud_metadata
 
@@ -625,13 +747,23 @@ class AudioPlayer:
         if self._current and length > 0:
             self._current.duration = length / 1000.0
 
+        # VLC reports length=0 for HTTP streams without Content-Length
+        # (Spotify via the librespot loopback). Fall back to the duration
+        # already captured in the Track from the source's metadata.
+        if length > 0:
+            duration = length / 1000.0
+        elif self._current and self._current.duration:
+            duration = self._current.duration
+        else:
+            duration = 0.0
+
         return PlayerState(
             current_track=self._current,
             queue=list(self._queue),
             is_playing=is_playing,
             volume=self._volume,
             position=max(0, position / 1000.0) if position >= 0 else 0.0,
-            duration=length / 1000.0 if length > 0 else 0.0,
+            duration=duration,
             shuffle=self._shuffle,
             repeat=self._repeat,
             normalize=self._normalize,
