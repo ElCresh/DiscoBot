@@ -29,6 +29,40 @@ _CHUNK_BYTES = 64 * 1024
 _ZEROCONF_AUTOSTOP_DELAY_S = 2.0
 
 
+def _detect_lan_ip() -> str | None:
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def _patch_librespot_zeroconf_loopback() -> None:
+    # Su Debian/Ubuntu /etc/hosts mappa l'hostname a 127.0.1.1, quindi
+    # librespot-python pubblicizza il device Connect con un IP loopback e il
+    # telefono non lo vede. Sostituiamo gethostbyname solo nel namespace di
+    # librespot.zeroconf con un fallback all'IP LAN reale.
+    import librespot.zeroconf as _lzc
+    if getattr(_lzc, "_discobot_patched", False):
+        return
+    _orig = _lzc.socket.gethostbyname
+
+    def _gethostbyname(host):
+        addr = _orig(host)
+        if addr.startswith("127."):
+            lan = _detect_lan_ip()
+            if lan and not lan.startswith("127."):
+                return lan
+        return addr
+
+    _lzc.socket.gethostbyname = _gethostbyname
+    _lzc._discobot_patched = True
+
+
 class SpotifyAudio:
     """Singleton wrapper around a librespot Session.
 
@@ -279,6 +313,7 @@ class ZeroconfBootstrap:
 
     def start(self, device_name: str = "DiscoBot") -> dict:
         from librespot.core import Session
+        _patch_librespot_zeroconf_loopback()
         from librespot.zeroconf import ZeroconfServer
 
         with self._lock:
@@ -306,6 +341,12 @@ class ZeroconfBootstrap:
                 "Zeroconf Spotify Connect started as '%s' (waiting for login)",
                 device_name,
             )
+            lan = _detect_lan_ip()
+            if lan:
+                logger.info(
+                    "Annunciato su IP LAN: %s — assicurati che il telefono sia sulla stessa rete",
+                    lan,
+                )
             return self.status()
 
     def _on_login(self) -> None:
