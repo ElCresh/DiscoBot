@@ -133,13 +133,35 @@ class SpotifyAudio:
         """
         if not self.is_authenticated():
             return
-        try:
-            with self._lock:
-                if self._session is None:
+        # Retry breve sugli errori di rete: capita che all'avvio la rete non
+        # sia ancora pronta (sleep/wake, DHCP lento, Spotify AP transient).
+        # Errori non-network (auth, credenziali corrotte) escono subito.
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                with self._lock:
+                    if self._session is not None:
+                        return
                     self._session = self._build_session()
                     logger.info("Spotify librespot session prewarmed")
-        except Exception:
-            logger.exception("Spotify prewarm failed (will retry on first play)")
+                    return
+            except (ConnectionError, OSError) as e:
+                last_err = e
+                logger.warning(
+                    "Spotify prewarm: connessione fallita (tentativo %d/3): %s",
+                    attempt + 1, e,
+                )
+                if attempt < 2:
+                    time.sleep(2)
+            except Exception as e:
+                logger.warning(
+                    "Spotify prewarm fallito (verra' ritentato al primo play): %s", e
+                )
+                return
+        logger.warning(
+            "Spotify prewarm fallito dopo 3 tentativi (verra' ritentato al primo play): %s",
+            last_err,
+        )
 
     def open_track_stream(self, track_id: str) -> Iterator[bytes]:
         """Open a Spotify track and return a chunk generator.

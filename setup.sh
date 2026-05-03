@@ -72,4 +72,21 @@ else
     fi
 fi
 
+# Installa desktop entry + icone hicolor (solo Linux, idempotente).
+# Permette alla dock/taskbar (GNOME/KDE/XFCE/Cinnamon/...) di mostrare
+# l'icona DiscoBot invece di quella generica Python.
+if [ "$(uname -s)" = "Linux" ]; then
+    DESKTOP_FILE="$HOME/.local/share/applications/discobot.desktop"
+    EXPECTED_EXEC="$(pwd)/run.sh"
+    NEEDS_INSTALL=1
+    if [ -f "$DESKTOP_FILE" ] && grep -q "^Exec=$EXPECTED_EXEC$" "$DESKTOP_FILE" 2>/dev/null; then
+        NEEDS_INSTALL=0
+    fi
+    if [ "$NEEDS_INSTALL" = "1" ]; then
+        DISCOBOT_SKIP_DEPCHECK=1 python main.py --install-desktop || true
+    else
+        echo "Desktop entry gia' installato (Exec coerente)."
+    fi
+fi
+
 echo "Setup completato. Avvia con ./run.sh"

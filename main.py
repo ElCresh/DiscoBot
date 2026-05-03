@@ -48,6 +48,14 @@ if "--reset-password" in sys.argv:
     print("Password Manager cancellata. Al prossimo accesso a /m verra' chiesta una nuova password.")
     sys.exit(0)
 
+# One-shot install/uninstall del desktop entry (solo Linux).
+if "--install-desktop" in sys.argv:
+    from app.desktop_install import install
+    sys.exit(install())
+if "--uninstall-desktop" in sys.argv:
+    from app.desktop_install import uninstall
+    sys.exit(uninstall())
+
 import uvicorn
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
@@ -116,7 +124,19 @@ if __name__ == "__main__":
         except Exception:
             logger.debug("Failed to set AppUserModelID", exc_info=True)
 
+    # Identita' applicativa: settata PRIMA di costruire QApplication cosi' la
+    # registrazione al portale D-Bus (Wayland/XDG) usa subito l'app id
+    # corretto. Settarla dopo causa il warning "Could not register app ID:
+    # Connection already associated with an application ID".
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtGui import QGuiApplication
+    QCoreApplication.setApplicationName("DiscoBot")
+    QCoreApplication.setOrganizationName("DiscoBot")
+    if sys.platform == "linux":
+        QGuiApplication.setDesktopFileName("discobot")
+
     qt_app = QApplication(sys.argv)
+    qt_app.setApplicationDisplayName("DiscoBot")
 
     # Import after QApplication exists. app.api creates the AudioPlayer at import time;
     # we then attach the video widget once the window is shown.
@@ -142,6 +162,20 @@ if __name__ == "__main__":
     heartbeat.timeout.connect(lambda: None)
 
     threading.Thread(target=_run_server, daemon=True).start()
+
+    # Inibisce sospensione + oscuramento monitor finche' DiscoBot e' vivo.
+    # Always-on (no toggle UI). Rilasciato su aboutToQuit.
+    from app.power import get_inhibitor
+    get_inhibitor().start()
+    qt_app.aboutToQuit.connect(get_inhibitor().stop)
+
+    # System tray icon: menu di accesso rapido (Manager / pubblico / IP /
+    # tunnel / Esci). Su GNOME senza estensione AppIndicator l'icona non
+    # compare ma l'app continua.
+    from app.tray import TrayManager
+    tray = TrayManager(qt_app, window, settings.port, make_app_icon())
+    tray.show()
+    qt_app.aboutToQuit.connect(tray.hide)
 
     # Pre-warm the Spotify librespot session in background so the first play
     # doesn't pay the AP handshake latency. Status is exposed via
