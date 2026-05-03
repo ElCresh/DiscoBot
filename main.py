@@ -1,8 +1,16 @@
 """DiscoBot - Remote-controlled audio player + native presentation kiosk."""
 
 import os
-# Silenzia libvlc prima che qualunque import lo inizializzi.
+import sys
+# Silenzia libvlc e VA-API prima che qualunque import li inizializzi.
 os.environ.setdefault("VLC_VERBOSE", "-1")
+os.environ.setdefault("LIBVA_MESSAGING_LEVEL", "0")
+
+# Wayland + VLC video embedding non funziona: il binding di VLC al widget Qt
+# nativo richiede un XID. Forziamo XWayland (QT_QPA_PLATFORM=xcb) se l'utente
+# non l'ha gia' impostata. XWayland e' installato di default su Ubuntu Desktop.
+if sys.platform == "linux" and os.environ.get("XDG_SESSION_TYPE") == "wayland":
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 print("Avvio in corso...", flush=True)
 
@@ -13,7 +21,6 @@ if os.environ.get("DISCOBOT_SKIP_DEPCHECK") != "1":
 import logging
 import signal
 import socket
-import sys
 import threading
 
 # Flag --debug da CLI: rimosso da argv prima di passarlo a Qt per pulizia.

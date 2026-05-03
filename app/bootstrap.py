@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import glob
 import importlib.metadata
+import os
 import platform
 import re
 import sys
@@ -28,6 +29,12 @@ _FLUIDSYNTH_PLUGIN_GLOBS = (
     "/usr/lib/vlc/plugins/**/*fluidsynth*",
     "/usr/lib64/vlc/plugins/**/*fluidsynth*",
     "/usr/local/lib/vlc/plugins/**/*fluidsynth*",
+)
+
+# Linux: lib di sistema richieste dal Qt xcb platform plugin (Qt >=6.5).
+# Su Windows e macOS Qt non usa xcb, quindi il check è Linux-only.
+_QT_XCB_REQUIRED_LIBS = (
+    ("libxcb-cursor.so.0", "libxcb-cursor0"),
 )
 
 
@@ -86,6 +93,36 @@ def _fluidsynth_install_hint() -> str:
     return "Reinstalla VLC dal sito ufficiale (videolan.org)"
 
 
+def _will_use_qt_xcb() -> bool:
+    # Riproduce la logica di main.py: su Linux Qt usa xcb tranne se l'utente
+    # ha esplicitamente chiesto un'altra piattaforma (es. wayland).
+    if platform.system() != "Linux":
+        return False
+    return os.environ.get("QT_QPA_PLATFORM", "xcb") == "xcb"
+
+
+def _check_qt_xcb_libs() -> list[tuple[str, str]]:
+    if not _will_use_qt_xcb():
+        return []
+    import ctypes
+    missing: list[tuple[str, str]] = []
+    for soname, package in _QT_XCB_REQUIRED_LIBS:
+        try:
+            ctypes.CDLL(soname)
+        except OSError:
+            missing.append((soname, package))
+    return missing
+
+
+def _qt_xcb_install_hint(packages: list[str]) -> str:
+    debs = " ".join(packages)
+    fedora_pkgs = " ".join(p.replace("libxcb-cursor0", "xcb-util-cursor") for p in packages)
+    return (
+        f"sudo apt install {debs}   # Debian/Ubuntu\n"
+        f"           sudo dnf install {fedora_pkgs}   # Fedora"
+    )
+
+
 def _hints_for_os() -> tuple[str, str]:
     system = platform.system()
     if system == "Linux":
@@ -110,7 +147,9 @@ def check_dependencies() -> None:
     if "python-vlc" not in missing_pkgs:
         libvlc_error = _check_libvlc()
 
-    if missing_pkgs or libvlc_error is not None:
+    missing_qt_libs = _check_qt_xcb_libs()
+
+    if missing_pkgs or libvlc_error is not None or missing_qt_libs:
         pip_hint, vlc_hint = _hints_for_os()
         print("\nDiscoBot non puo' avviarsi: dipendenze mancanti.\n", file=sys.stderr)
 
@@ -123,6 +162,13 @@ def check_dependencies() -> None:
         if libvlc_error is not None:
             print(f"libvlc nativo non utilizzabile ({libvlc_error}).", file=sys.stderr)
             print(f"Per installarlo:\n    {vlc_hint}\n", file=sys.stderr)
+
+        if missing_qt_libs:
+            print("Librerie di sistema richieste dal plugin Qt xcb mancanti:", file=sys.stderr)
+            for soname, package in missing_qt_libs:
+                print(f"  - {soname}  (pacchetto: {package})", file=sys.stderr)
+            hint = _qt_xcb_install_hint([package for _, package in missing_qt_libs])
+            print(f"\nPer installarle:\n    {hint}\n", file=sys.stderr)
 
         print("Per saltare questo controllo: DISCOBOT_SKIP_DEPCHECK=1", file=sys.stderr)
         sys.exit(1)

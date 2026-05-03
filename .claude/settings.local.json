@@ -40,7 +40,9 @@
       "Bash(vlc -H)",
       "Bash(python3 -c \"import socket; h=socket.gethostname\\(\\); print\\('hostname:', h\\); print\\('resolved:', socket.gethostbyname\\(h\\)\\)\")",
       "Bash(ip -4 -o addr show)",
-      "Bash(awk '{print $2, $4}')"
+      "Bash(awk '{print $2, $4}')",
+      "Bash(dpkg -l)",
+      "Bash(ldconfig -p)"
     ]
   }
 }

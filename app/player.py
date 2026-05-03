@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import sys
 import threading
 import time
 from pathlib import Path
@@ -483,7 +484,7 @@ class AudioPlayer:
             self._player.set_media(media)
             if self._video_hwnd is not None:
                 # Reapply on every track — VLC sometimes drops the binding on media change.
-                self._player.set_hwnd(self._video_hwnd)
+                self._set_video_handle(self._video_hwnd)
             self._player.play()
             self._player.audio_set_volume(self._volume)
             self._current = track
@@ -639,6 +640,18 @@ class AudioPlayer:
             self._save_state()
             self._broadcast_state()
 
+    def _set_video_handle(self, handle: int) -> None:
+        # libvlc espone tre API di binding diverse per OS: HWND su Windows,
+        # NSObject su macOS, XID su Linux. Le altre due chiamate non sollevano
+        # eccezione su piattaforma sbagliata, ma non bind nulla — il video non
+        # appare e la window resta in stato indefinito.
+        if sys.platform == "win32":
+            self._player.set_hwnd(handle)
+        elif sys.platform == "darwin":
+            self._player.set_nsobject(handle)
+        else:
+            self._player.set_xwindow(handle)
+
     def attach_video_window(self, hwnd: int):
         """Bind VLC video output to a native window handle (HWND/XID/NSView).
 
@@ -647,9 +660,9 @@ class AudioPlayer:
         """
         self._video_hwnd = hwnd
         try:
-            self._player.set_hwnd(hwnd)
+            self._set_video_handle(hwnd)
         except Exception:
-            logger.exception("Failed to bind VLC video output to HWND %s", hwnd)
+            logger.exception("Failed to bind VLC video output to handle %s", hwnd)
 
     @property
     def vlc_player(self):
