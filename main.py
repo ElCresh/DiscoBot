@@ -6,6 +6,10 @@ os.environ.setdefault("VLC_VERBOSE", "-1")
 
 print("Avvio in corso...", flush=True)
 
+if os.environ.get("DISCOBOT_SKIP_DEPCHECK") != "1":
+    from app.bootstrap import check_dependencies
+    check_dependencies()
+
 import logging
 import signal
 import socket

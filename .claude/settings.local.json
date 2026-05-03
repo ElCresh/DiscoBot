@@ -32,7 +32,15 @@
       "Bash(pip show *)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:pypi.org)",
-      "WebFetch(domain:api.github.com)"
+      "WebFetch(domain:api.github.com)",
+      "Bash(chmod +x /home/andrea/Desktop/DiscoBot/setup.sh /home/andrea/Desktop/DiscoBot/run.sh)",
+      "Bash(.venv/bin/python *)",
+      "Bash(echo \"---exit: $?\")",
+      "Bash(vlc --version)",
+      "Bash(vlc -H)",
+      "Bash(python3 -c \"import socket; h=socket.gethostname\\(\\); print\\('hostname:', h\\); print\\('resolved:', socket.gethostbyname\\(h\\)\\)\")",
+      "Bash(ip -4 -o addr show)",
+      "Bash(awk '{print $2, $4}')"
     ]
   }
 }
