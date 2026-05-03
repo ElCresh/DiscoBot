@@ -49,7 +49,22 @@
       "Bash(pkill -f \"uvicorn.run.*18000\")",
       "Bash(pkill -f \"port=18000\")",
       "Bash(.venv/bin/pip install *)",
-      "Bash(.venv/bin/playwright install *)"
+      "Bash(.venv/bin/playwright install *)",
+      "Bash(pkill -9 -f \"vendor/cloudflared\")",
+      "Bash(rm -f /tmp/dbtest.log)",
+      "Bash(DISCOBOT_PORT=18000 DISCOBOT_SKIP_DEPCHECK=1 .venv/bin/python -c \"import os; os.environ['VLC_VERBOSE']='-1'; import uvicorn; from app.api import app; uvicorn.run\\(app, host='127.0.0.1', port=18000, log_level='info'\\)\")",
+      "Bash(echo \"started PID $!\")",
+      "Bash(pkill -9 -f \"port=18000\")",
+      "Bash(pkill -9 -f \"uvicorn\")",
+      "Bash(pkill -9 -f \"cloudflared\")",
+      "Bash(echo \"PID=$!\")",
+      "Bash(DISCOBOT_PORT=18000 DISCOBOT_SKIP_DEPCHECK=1 .venv/bin/python -c \"import os; os.environ['VLC_VERBOSE']='-1'; import uvicorn; from app.api import app; uvicorn.run\\(app, host='127.0.0.1', port=18000, log_level='warning'\\)\")",
+      "Bash(awk '{print \"name=\" $6, \"max-age=\" $5, \"value-len=\" length\\($7\\)}')",
+      "Bash(kill -9 459770)",
+      "Bash(DISCOBOT_SKIP_DEPCHECK=1 .venv/bin/python main.py --reset-password)",
+      "Bash(pkill -9 -f \"uvicorn|cloudflared|port=18000\")",
+      "Bash(awk '{print \"value-len:\", length\\($7\\)}')",
+      "Bash(kill -9 518002)"
     ]
   }
 }

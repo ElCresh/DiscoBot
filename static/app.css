@@ -1044,6 +1044,118 @@ dialog::backdrop {
     overflow-y: auto;
 }
 
+/* ---------- Settings dialog: sidebar + content layout ---------- */
+
+dialog.settings-dialog {
+    max-width: 780px;
+    width: calc(100% - 2 * var(--sp-4));
+}
+
+.settings-layout {
+    display: flex;
+    min-height: 460px;
+    max-height: 70vh;
+}
+
+.settings-nav {
+    width: 200px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding: var(--sp-3) var(--sp-2);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.settings-nav-item {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+    transition: background var(--t-fast), color var(--t-fast);
+    white-space: nowrap;
+}
+
+.settings-nav-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.settings-nav-item[aria-selected="true"] {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.settings-nav-item.danger { color: var(--text-muted); }
+.settings-nav-item.danger:hover { color: var(--error); background: rgba(239, 68, 68, .08); }
+
+.settings-nav-spacer { flex: 1; min-height: var(--sp-3); }
+
+.settings-content {
+    flex: 1;
+    padding: var(--sp-4) var(--sp-5);
+    overflow-y: auto;
+    min-width: 0;
+}
+
+.settings-content h3 {
+    margin: 0 0 var(--sp-4);
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-secondary);
+}
+
+.settings-section-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+}
+
+.settings-section-body label.toggle-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    cursor: pointer;
+}
+
+.settings-section-body label.toggle-row input[type="checkbox"] {
+    margin-top: 2px;
+}
+
+.settings-section-body.disabled {
+    opacity: .5;
+    pointer-events: none;
+}
+
+@media (max-width: 639px) {
+    .settings-layout {
+        flex-direction: column;
+        min-height: 0;
+        max-height: 80vh;
+    }
+    .settings-nav {
+        width: auto;
+        flex-direction: row;
+        overflow-x: auto;
+        overflow-y: hidden;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        padding: var(--sp-2);
+        gap: 4px;
+    }
+    .settings-nav-item { flex-shrink: 0; }
+    .settings-nav-spacer { display: none; }
+    .settings-content { padding: var(--sp-3) var(--sp-4); }
+}
+
 .dialog-section {
     display: flex;
     flex-direction: column;

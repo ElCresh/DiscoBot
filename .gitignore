@@ -20,6 +20,15 @@ venv/
 # Player state
 state.json
 
+# Runtime config (toggle live, generato al primo avvio)
+runtime_config.json
+
+# Manager auth (password hash + secret, NON committare)
+manager_auth.json
+
+# Manager active sessions (cookie ids, ip, user-agent — privacy)
+manager_sessions.json
+
 # Environment
 .env
 

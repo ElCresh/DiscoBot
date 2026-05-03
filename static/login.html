@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0e0e10">
+    <title>DiscoBot — Manager</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <script>
+        (function() {
+            try {
+                var saved = localStorage.getItem('theme');
+                var t = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {}
+        })();
+    </script>
+    <style>
+        body { display: flex; align-items: center; justify-content: center; padding: var(--sp-4); }
+        .login-card {
+            width: 100%;
+            max-width: 380px;
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: var(--r-lg);
+            padding: var(--sp-6);
+            box-shadow: var(--shadow-md);
+        }
+        .login-brand {
+            font-family: var(--font-mono);
+            font-weight: 500;
+            font-size: 18px;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            text-align: center;
+            margin-bottom: var(--sp-2);
+        }
+        .login-subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-bottom: var(--sp-5);
+        }
+        .login-form { display: flex; flex-direction: column; gap: var(--sp-3); }
+        .login-form label.checkbox-row {
+            display: flex; align-items: center; gap: var(--sp-2);
+            font-size: 13px; cursor: pointer; user-select: none;
+        }
+        .login-error {
+            padding: var(--sp-2) var(--sp-3);
+            border-radius: var(--r-sm);
+            background: rgba(239, 68, 68, .12);
+            border-left: 3px solid var(--error);
+            color: var(--error);
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body x-data="loginApp()" x-init="init()">
+
+<div class="login-card">
+    <div class="login-brand">DISCOBOT</div>
+
+    <!-- LOADING -->
+    <template x-if="loading">
+        <div class="login-subtitle">Caricamento...</div>
+    </template>
+
+    <!-- AUTH DISABILITATA — non dovrebbe servire visitare /m/login, ma se l'utente ci finisce mostriamo un messaggio -->
+    <template x-if="!loading && !authEnabled">
+        <div>
+            <div class="login-subtitle">Autenticazione disattivata. <a href="/m">Vai al Manager</a></div>
+        </div>
+    </template>
+
+    <!-- SETUP WIZARD -->
+    <template x-if="!loading && authEnabled && !configured">
+        <div>
+            <div class="login-subtitle">Imposta una password per proteggere il pannello Manager.</div>
+            <form class="login-form" @submit.prevent="doSetup()">
+                <input type="password" x-model="setupPassword" placeholder="Nuova password (min 8)" autofocus required minlength="8">
+                <input type="password" x-model="setupConfirm" placeholder="Conferma password" required minlength="8">
+                <template x-if="setupError">
+                    <div class="login-error" x-text="setupError"></div>
+                </template>
+                <button class="btn btn-primary" type="submit" :disabled="busy">
+                    <span x-text="busy ? 'Salvataggio...' : 'Imposta password'"></span>
+                </button>
+            </form>
+        </div>
+    </template>
+
+    <!-- LOGIN -->
+    <template x-if="!loading && authEnabled && configured">
+        <div>
+            <div class="login-subtitle">Accedi al pannello Manager</div>
+            <form class="login-form" @submit.prevent="doLogin()">
+                <input type="password" x-model="loginPassword" placeholder="Password" autofocus required>
+                <label class="checkbox-row">
+                    <input type="checkbox" x-model="rememberMe">
+                    Ricordami su questo dispositivo
+                </label>
+                <template x-if="loginError">
+                    <div class="login-error" x-text="loginError"></div>
+                </template>
+                <button class="btn btn-primary" type="submit" :disabled="busy || cooldownLeft > 0">
+                    <span x-text="cooldownLeft > 0 ? `Attendi ${cooldownLeft}s` : (busy ? 'Verifica...' : 'Accedi')"></span>
+                </button>
+            </form>
+        </div>
+    </template>
+</div>
+
+<script src="/static/vendor/alpinejs.min.js" defer></script>
+<script>
+function loginApp() {
+    return {
+        loading: true,
+        authEnabled: true,
+        configured: false,
+        busy: false,
+        setupPassword: '', setupConfirm: '', setupError: '',
+        loginPassword: '', rememberMe: false, loginError: '',
+        cooldownLeft: 0, _cooldownTimer: null,
+
+        async init() {
+            try {
+                const res = await fetch('/m/auth-status', { credentials: 'same-origin' });
+                const data = await res.json();
+                this.authEnabled = data.auth_enabled;
+                this.configured = data.configured;
+                if (data.authenticated) {
+                    location.replace('/m');
+                    return;
+                }
+            } catch (e) {}
+            this.loading = false;
+        },
+
+        async doSetup() {
+            this.setupError = '';
+            if (this.setupPassword.length < 8) {
+                this.setupError = 'La password deve essere lunga almeno 8 caratteri.';
+                return;
+            }
+            if (this.setupPassword !== this.setupConfirm) {
+                this.setupError = 'Le password non coincidono.';
+                return;
+            }
+            this.busy = true;
+            try {
+                const res = await fetch('/m/setup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ password: this.setupPassword }),
+                });
+                if (!res.ok) {
+                    const j = await res.json().catch(() => ({}));
+                    this.setupError = j.detail || `Errore ${res.status}`;
+                    this.busy = false;
+                    return;
+                }
+                location.replace('/m');
+            } catch (e) {
+                this.setupError = 'Errore di rete';
+                this.busy = false;
+            }
+        },
+
+        async doLogin() {
+            this.loginError = '';
+            this.busy = true;
+            try {
+                const res = await fetch('/m/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ password: this.loginPassword, remember: this.rememberMe }),
+                });
+                if (res.status === 429) {
+                    const retryAfter = parseInt(res.headers.get('Retry-After') || '60', 10);
+                    const j = await res.json().catch(() => ({}));
+                    this.loginError = j.detail || 'Troppi tentativi.';
+                    this._startCooldown(retryAfter);
+                    this.busy = false;
+                    return;
+                }
+                if (!res.ok) {
+                    const j = await res.json().catch(() => ({}));
+                    this.loginError = j.detail || `Errore ${res.status}`;
+                    this.loginPassword = '';
+                    this.busy = false;
+                    return;
+                }
+                location.replace('/m');
+            } catch (e) {
+                this.loginError = 'Errore di rete';
+                this.busy = false;
+            }
+        },
+
+        _startCooldown(seconds) {
+            this.cooldownLeft = seconds;
+            if (this._cooldownTimer) clearInterval(this._cooldownTimer);
+            this._cooldownTimer = setInterval(() => {
+                this.cooldownLeft -= 1;
+                if (this.cooldownLeft <= 0) {
+                    clearInterval(this._cooldownTimer);
+                    this._cooldownTimer = null;
+                    this.cooldownLeft = 0;
+                    this.loginError = '';
+                }
+            }, 1000);
+        },
+    };
+}
+</script>
+</body>
+</html>

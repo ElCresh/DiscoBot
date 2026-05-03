@@ -35,6 +35,7 @@ function discoBot() {
         // ---- ui ----
         activeTab: 'player',
         settingsOpen: false,
+        settingsActiveSection: 'security',  // sezione attiva nel dialog
         theme: document.documentElement.getAttribute('data-theme') || 'dark',
         viewport: window.innerWidth,
         toasts: {
@@ -87,6 +88,26 @@ function discoBot() {
 
         // ---- playlists ----
         playlists: [],
+
+        // ---- runtime config + pending (interfaccia pubblica) ----
+        runtimeConfig: {
+            public_enabled: false,
+            public_require_approval: true,
+            public_sources: { local: false, youtube: true, spotify: true, soundcloud: true },
+            manager_auth_enabled: true,
+        },
+        pending: [],
+
+        // ---- sessioni attive (manager) ----
+        sessions: [],
+
+        // ---- tunnel pubblico (cloudflared) ----
+        tunnel: {
+            running: false, url: null, error: null,
+            started_at: null, binary_present: false,
+            starting: false,
+            _pollTimer: null,
+        },
 
         // ---- drag-drop state ----
         _draggedId: null,
@@ -146,6 +167,12 @@ function discoBot() {
             this.refreshPlaylists();
             this.refreshSpotifyAuth();
             this.refreshHistory();
+            this.refreshRuntimeConfig().then(() => this.refreshPending());
+            // Polling pending ogni 4s (solo se interfaccia pubblica attiva)
+            setInterval(() => this.refreshPending(), 4000);
+            // Tunnel: refresh iniziale + polling soft ogni 30s (per catturare crash)
+            this.refreshTunnel();
+            setInterval(() => { if (!this.tunnel._pollTimer) this.refreshTunnel(); }, 30000);
 
             // Position polling fallback (WS doesn't push every second)
             setInterval(async () => {
@@ -591,6 +618,185 @@ function discoBot() {
                 this.playlists = data.playlists || [];
             } catch (e) { console.error('Playlists refresh failed', e); }
         },
+
+        // ===== Runtime config + Pending requests (manager) =====
+        async refreshRuntimeConfig() {
+            try {
+                this.runtimeConfig = await this.api('/admin/config');
+            } catch (e) { console.error('Runtime config refresh failed', e); }
+        },
+        async patchConfig(updates) {
+            try {
+                this.runtimeConfig = await this.api('/admin/config', 'PATCH', updates);
+                this.toasts.push('success', 'Impostazioni aggiornate');
+                if (this.runtimeConfig.public_enabled) this.refreshPending();
+                else this.pending = [];
+                // Se l'auth è stata disabilitata, anche il tunnel viene fermato lato backend
+                if (!this.runtimeConfig.manager_auth_enabled) this.refreshTunnel();
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+
+        confirmAuthToggle(event) {
+            const checked = event.target.checked;
+            if (!checked) {
+                const ok = window.confirm(
+                    'Disattivare l\'autenticazione Manager?\n\n' +
+                    'Chiunque sulla LAN potrà accedere a /m senza password.\n' +
+                    'L\'interfaccia pubblica e il tunnel verranno disabilitati per sicurezza.'
+                );
+                if (!ok) {
+                    event.target.checked = true;
+                    return;
+                }
+            }
+            this.patchConfig({ manager_auth_enabled: checked });
+        },
+
+        async logout() {
+            try {
+                await this.api('/m/logout', 'POST');
+                location.replace('/m/login');
+            } catch (e) {
+                this.toasts.push('error', `Errore logout: ${e.message}`);
+            }
+        },
+
+        async refreshSessions() {
+            if (!this.runtimeConfig.manager_auth_enabled) {
+                this.sessions = [];
+                return;
+            }
+            try {
+                const data = await this.api('/m/sessions');
+                this.sessions = data.sessions || [];
+            } catch (e) {}
+        },
+        async revokeSession(sid) {
+            const s = this.sessions.find(x => x.id === sid);
+            const label = s ? s.ua_label : 'questa sessione';
+            if (!confirm(`Revocare la sessione di ${label}?`)) return;
+            try {
+                await this.api(`/m/sessions/${sid}`, 'DELETE');
+                this.toasts.push('warning', 'Sessione revocata');
+                this.refreshSessions();
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async revokeAllOthers() {
+            const n = this.sessions.filter(s => !s.current).length;
+            if (n === 0) return;
+            if (!confirm(`Esci da ${n} altri dispositivi?`)) return;
+            try {
+                const r = await this.api('/m/sessions?keep_current=true', 'DELETE');
+                this.toasts.push('warning', `${r.count} sessioni revocate`);
+                this.refreshSessions();
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async refreshPending() {
+            if (!this.runtimeConfig.public_enabled || !this.runtimeConfig.public_require_approval) {
+                this.pending = [];
+                return;
+            }
+            try {
+                const data = await this.api('/pending');
+                this.pending = data.items || [];
+            } catch (e) {}
+        },
+        async approvePending(pid) {
+            try {
+                await this.api(`/pending/${pid}/approve`, 'POST');
+                this.toasts.push('success', 'Richiesta approvata');
+                this.refreshPending();
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async rejectPending(pid) {
+            try {
+                await this.api(`/pending/${pid}`, 'DELETE');
+                this.toasts.push('warning', 'Richiesta rifiutata');
+                this.refreshPending();
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+
+        // ===== Tunnel pubblico =====
+        async refreshTunnel() {
+            try {
+                const data = await this.api('/admin/tunnel/status');
+                Object.assign(this.tunnel, data);
+                // Polling rapido finché stiamo aspettando l'URL
+                if (this.tunnel.running && !this.tunnel.url && !this.tunnel._pollTimer) {
+                    this.tunnel._pollTimer = setInterval(() => this.refreshTunnel(), 1000);
+                } else if ((!this.tunnel.running || this.tunnel.url) && this.tunnel._pollTimer) {
+                    clearInterval(this.tunnel._pollTimer);
+                    this.tunnel._pollTimer = null;
+                    if (this.tunnel.url && this.tunnel.starting) {
+                        this.toasts.push('success', `Tunnel attivo: ${this.tunnel.url}`);
+                    }
+                    this.tunnel.starting = false;
+                }
+            } catch (e) {}
+        },
+        async tunnelStart() {
+            this.tunnel.starting = true;
+            this.tunnel.error = null;
+            try {
+                const data = await this.api('/admin/tunnel/start', 'POST');
+                Object.assign(this.tunnel, data);
+                if (this.tunnel.error) {
+                    this.toasts.push('error', this.tunnel.error);
+                    this.tunnel.starting = false;
+                    return;
+                }
+                // Polling immediato per catturare l'URL appena disponibile
+                if (!this.tunnel._pollTimer) {
+                    this.tunnel._pollTimer = setInterval(() => this.refreshTunnel(), 1000);
+                }
+            } catch (e) {
+                this.tunnel.starting = false;
+                this.toasts.push('error', `Errore avvio tunnel: ${e.message}`);
+            }
+        },
+        async tunnelStop() {
+            try {
+                const data = await this.api('/admin/tunnel/stop', 'POST');
+                Object.assign(this.tunnel, data);
+                this.toasts.push('warning', 'Tunnel fermato');
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+            if (this.tunnel._pollTimer) {
+                clearInterval(this.tunnel._pollTimer);
+                this.tunnel._pollTimer = null;
+            }
+        },
+        async copyTunnelUrl() {
+            if (!this.tunnel.url) return;
+            let ok = false;
+            // navigator.clipboard funziona solo in secure context (HTTPS o localhost).
+            // Su LAN HTTP serve fallback a document.execCommand.
+            if (navigator.clipboard && window.isSecureContext) {
+                try {
+                    await navigator.clipboard.writeText(this.tunnel.url);
+                    ok = true;
+                } catch (e) { /* fallthrough */ }
+            }
+            if (!ok) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = this.tunnel.url;
+                    ta.setAttribute('readonly', '');
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    ta.style.top = '0';
+                    document.body.appendChild(ta);
+                    ta.focus();
+                    ta.select();
+                    ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                } catch (e) { /* fallthrough */ }
+            }
+            if (ok) {
+                this.toasts.push('success', 'URL copiato');
+            } else {
+                this.toasts.push('warning', 'Copia non disponibile — seleziona il testo e copialo a mano');
+            }
+        },
         async savePlaylist() {
             const name = this.playlistName.trim();
             if (!name) return;
@@ -683,7 +889,12 @@ function discoBot() {
                 d.showModal();
                 this.settingsOpen = true;
                 this.refreshSpotifyAuth();
+                this.refreshSessions();
             }
+        },
+        openSettingsAt(section) {
+            this.settingsActiveSection = section;
+            this.openSettings();
         },
         async closeSettings() {
             const d = document.getElementById('settingsDialog');

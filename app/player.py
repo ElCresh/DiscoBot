@@ -13,7 +13,9 @@ from pathlib import Path
 
 import vlc
 
-from app.models import HistoryEntry, PlayerState, RepeatMode, Track, TrackType
+from app.models import (
+    HistoryEntry, PendingTrack, PlayerState, RepeatMode, Track, TrackRequest, TrackType,
+)
 from app.youtube import extract_audio_url
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,9 @@ COVER_PRUNE_INTERVAL_S = 30 * 60  # 30min — orphan cover-cache sweep cadence
 # (covers transient network/Spotify hiccups), then advance to next.
 PLAY_MAX_ATTEMPTS = 3
 PLAY_RETRY_DELAY_S = 1.0
+# Anti-abuso interfaccia pubblica
+PUBLIC_MAX_PENDING_PER_REQUESTER = 3
+PUBLIC_COOLDOWN_SECONDS = 15.0
 # Watchdog: if a track set_media+play() doesn't reach Playing state within
 # this many seconds, treat it as stuck and trigger the retry policy. Streamed
 # sources (Spotify, YouTube) usually need a couple seconds to buffer; 15s is
@@ -137,6 +142,13 @@ class AudioPlayer:
         # so a watchdog firing after a skip doesn't retry the wrong track.
         self._play_attempts: dict[int, int] = {}
         self._play_watchdog: threading.Timer | None = None
+        # Public-interface pending queue (in-process, persisted in state.json).
+        # _pending_counter assigns monotonic IDs distinct from queue track IDs
+        # so frontend keys don't collide.
+        self._pending: list[PendingTrack] = []
+        self._pending_counter = 0
+        # Per-requester cooldown tracking for rate limiting.
+        self._public_last_request: dict[str, float] = {}
 
         PLAYLISTS_DIR.mkdir(exist_ok=True)
 
@@ -178,6 +190,8 @@ class AudioPlayer:
                 "current_track": current_data,
                 "queue": [t.model_dump() for t in self._queue],
                 "history": self._history,
+                "pending": [p.model_dump() for p in self._pending],
+                "pending_counter": self._pending_counter,
             }
             tmp_path = STATE_FILE.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -197,6 +211,14 @@ class AudioPlayer:
             self._repeat = RepeatMode(data.get("repeat", "off"))
             self._normalize = data.get("normalize", True)
             self._history = data.get("history", [])[:MAX_HISTORY]
+
+            # Restore pending list (public requests awaiting approval)
+            self._pending_counter = data.get("pending_counter", 0)
+            for p in data.get("pending", []):
+                try:
+                    self._pending.append(PendingTrack(**p))
+                except Exception:
+                    logger.warning("Skipping malformed pending entry: %r", p)
 
             # Restore queue
             for t in data.get("queue", []):
@@ -539,6 +561,96 @@ class AudioPlayer:
             self._save_state()
             self._broadcast_state()
             return track
+
+    # ----- Public interface: pending requests -----------------------------
+
+    def _check_public_rate(self, requester_id: str) -> None:
+        """Raise ValueError if requester is over the rate limit.
+
+        Run inside the lock. Counts only pending requests still waiting; once
+        approved/rejected they don't count toward the cap (so a regular user
+        can keep submitting at the cooldown rate).
+        """
+        now = time.monotonic()
+        last = self._public_last_request.get(requester_id)
+        if last is not None:
+            elapsed = now - last
+            if elapsed < PUBLIC_COOLDOWN_SECONDS:
+                wait = int(PUBLIC_COOLDOWN_SECONDS - elapsed) + 1
+                raise ValueError(
+                    f"Aspetta ancora {wait} secondi prima della prossima richiesta."
+                )
+        active = sum(1 for p in self._pending if p.requester_id == requester_id)
+        if active >= PUBLIC_MAX_PENDING_PER_REQUESTER:
+            raise ValueError(
+                f"Hai gia' {active} richieste in attesa, aspetta che il DJ le valuti."
+            )
+
+    def add_pending(
+        self,
+        track_request: TrackRequest,
+        requester_name: str,
+        requester_id: str,
+        preview_title: str | None = None,
+    ) -> PendingTrack:
+        """Queue a public request for the manager to approve."""
+        from datetime import datetime, timezone
+
+        with self._lock:
+            self._check_public_rate(requester_id)
+            self._pending_counter += 1
+            entry = PendingTrack(
+                id=self._pending_counter,
+                track_request=track_request,
+                requester_name=requester_name or "Anonimo",
+                requester_id=requester_id,
+                submitted_at=datetime.now(timezone.utc).isoformat(),
+                preview_title=preview_title,
+            )
+            self._pending.append(entry)
+            self._public_last_request[requester_id] = time.monotonic()
+            self._save_state()
+            self._broadcast_state()
+            return entry
+
+    def approve_pending(self, pending_id: int) -> Track:
+        """Move a pending request into the live queue, resolving its metadata."""
+        with self._lock:
+            idx = next((i for i, p in enumerate(self._pending) if p.id == pending_id), None)
+            if idx is None:
+                raise KeyError(f"Pending {pending_id} not found")
+            entry = self._pending.pop(idx)
+            self._save_state()
+        # add_track does its own locking + broadcast
+        return self.add_track(entry.track_request.path, entry.track_request.type)
+
+    def reject_pending(self, pending_id: int) -> None:
+        with self._lock:
+            idx = next((i for i, p in enumerate(self._pending) if p.id == pending_id), None)
+            if idx is None:
+                raise KeyError(f"Pending {pending_id} not found")
+            self._pending.pop(idx)
+            self._save_state()
+            self._broadcast_state()
+
+    def add_public_direct(
+        self,
+        track_request: TrackRequest,
+        requester_id: str,
+    ) -> Track:
+        """Direct-mode public add: enforce rate limit, then go through add_track."""
+        with self._lock:
+            self._check_public_rate(requester_id)
+            self._public_last_request[requester_id] = time.monotonic()
+        return self.add_track(track_request.path, track_request.type)
+
+    def get_pending(self) -> list[PendingTrack]:
+        with self._lock:
+            return list(self._pending)
+
+    def get_pending_for_requester(self, requester_id: str) -> list[PendingTrack]:
+        with self._lock:
+            return [p for p in self._pending if p.requester_id == requester_id]
 
     def play(self):
         """Resume playback."""

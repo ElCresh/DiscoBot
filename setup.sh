@@ -31,6 +31,45 @@ if [ ! -f ".env" ] && [ -f ".env.example" ]; then
     echo "Creato .env da .env.example — modifica i valori se necessario."
 fi
 
-mkdir -p soundfonts
+mkdir -p soundfonts vendor
+
+# Cloudflared (per il tunnel pubblico gestito da DiscoBot)
+CLOUDFLARED="vendor/cloudflared"
+if [ -x "$CLOUDFLARED" ] && "$CLOUDFLARED" --version >/dev/null 2>&1; then
+    echo "cloudflared gia' presente: $($CLOUDFLARED --version 2>/dev/null | head -1)"
+else
+    OS="$(uname -s)"
+    ARCH="$(uname -m)"
+    ASSET=""
+    EXTRACT="binary"
+    case "$OS-$ARCH" in
+        Linux-x86_64)   ASSET="cloudflared-linux-amd64" ;;
+        Linux-aarch64)  ASSET="cloudflared-linux-arm64" ;;
+        Linux-armv7l)   ASSET="cloudflared-linux-arm" ;;
+        Darwin-x86_64)  ASSET="cloudflared-darwin-amd64.tgz"; EXTRACT="tgz" ;;
+        Darwin-arm64)   ASSET="cloudflared-darwin-arm64.tgz"; EXTRACT="tgz" ;;
+        *)
+            echo "Attenzione: piattaforma non riconosciuta ($OS $ARCH). Tunnel pubblico non disponibile finche' non scarichi cloudflared manualmente in $CLOUDFLARED" >&2
+            ASSET=""
+            ;;
+    esac
+    if [ -n "$ASSET" ]; then
+        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/$ASSET"
+        echo "Scarico cloudflared ($ASSET)..."
+        if [ "$EXTRACT" = "tgz" ]; then
+            curl -fsSL "$URL" -o /tmp/cloudflared.tgz && \
+                tar -xzf /tmp/cloudflared.tgz -C vendor/ && \
+                rm -f /tmp/cloudflared.tgz
+        else
+            curl -fsSL "$URL" -o "$CLOUDFLARED"
+        fi
+        if [ -f "$CLOUDFLARED" ]; then
+            chmod +x "$CLOUDFLARED"
+            echo "cloudflared installato: $($CLOUDFLARED --version 2>/dev/null | head -1)"
+        else
+            echo "Attenzione: download cloudflared fallito" >&2
+        fi
+    fi
+fi
 
 echo "Setup completato. Avvia con ./run.sh"

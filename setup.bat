@@ -33,6 +33,25 @@ if not exist ".env" if exist ".env.example" (
 )
 
 if not exist "soundfonts" mkdir "soundfonts"
+if not exist "vendor" mkdir "vendor"
+
+REM Cloudflared per il tunnel pubblico
+set "CLOUDFLARED=vendor\cloudflared.exe"
+if exist "%CLOUDFLARED%" (
+    "%CLOUDFLARED%" --version >nul 2>&1
+    if not errorlevel 1 (
+        echo cloudflared gia^' presente.
+        goto cloudflared_done
+    )
+)
+echo Scarico cloudflared...
+powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' -OutFile '%CLOUDFLARED%'"
+if errorlevel 1 (
+    echo Attenzione: download cloudflared fallito. Tunnel pubblico non disponibile finche^' non lo scarichi manualmente.>&2
+) else (
+    "%CLOUDFLARED%" --version
+)
+:cloudflared_done
 
 echo Setup completato. Avvia con run.bat
 endlocal

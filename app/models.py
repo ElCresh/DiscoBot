@@ -36,6 +36,15 @@ class HistoryEntry(BaseModel):
     played_at: str  # ISO 8601
 
 
+class PendingTrack(BaseModel):
+    id: int
+    track_request: TrackRequest             # path + type
+    requester_name: str                     # "Anonimo" se vuoto
+    requester_id: str                       # UUID cookie
+    submitted_at: str                       # ISO 8601 UTC
+    preview_title: str | None = None        # facoltativa, mostrata al manager
+
+
 class SpotifySearchResult(BaseModel):
     spotify_id: str
     title: str

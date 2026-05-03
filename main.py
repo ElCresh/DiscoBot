@@ -35,6 +35,19 @@ if "--spotify-login" in sys.argv:
     bootstrap_login()
     sys.exit(0)
 
+# One-shot reset della password Manager.
+if "--reset-password" in sys.argv:
+    from app.auth import get_auth
+    auth = get_auth()
+    if auth.is_configured():
+        confirm = input("Sicuro di cancellare la password Manager? [s/N] ")
+        if confirm.strip().lower() not in ("s", "si", "y", "yes"):
+            print("Annullato.")
+            sys.exit(0)
+    auth.reset()
+    print("Password Manager cancellata. Al prossimo accesso a /m verra' chiesta una nuova password.")
+    sys.exit(0)
+
 import uvicorn
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication

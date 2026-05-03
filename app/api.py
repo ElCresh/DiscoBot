@@ -3,14 +3,22 @@
 import asyncio
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+import uuid as _uuid
+
+from fastapi import (
+    FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect,
+    Request, Response, Cookie,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from app.auth import COOKIE_NAME as MANAGER_COOKIE, get_auth, MIN_PASSWORD_LEN
 from app.config import settings
 from app.models import TrackRequest, Track, PlayerState, HistoryEntry, RepeatMode
 from app.player import AudioPlayer, ws_manager
+from app.runtime_config import get_runtime_config
+from app.tunnel import get_tunnel
 
 app = FastAPI(title="DiscoBot", version="2.0.0")
 
@@ -21,6 +29,53 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- Manager auth middleware: protegge tutte le route di controllo.
+# Quando manager_auth_enabled è False (toggle runtime), il middleware bypassa
+# senza fare nulla — la sezione manager torna libera (uso domestico fidato).
+MANAGER_PREFIXES = (
+    "/m", "/admin", "/pending", "/player", "/queue",
+    "/history", "/playlists", "/spotify/zeroconf",
+    "/spotify/auth-status", "/coverart_cache",
+    "/media/list", "/media/upload",
+)
+EXEMPT_FROM_AUTH = (
+    "/m/login", "/m/auth-status", "/m/setup", "/m/logout",
+)
+
+
+def _is_manager_path(path: str) -> bool:
+    for prefix in MANAGER_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def _is_exempt(path: str) -> bool:
+    for ep in EXEMPT_FROM_AUTH:
+        if path == ep or path.startswith(ep + "/"):
+            return True
+    return False
+
+
+@app.middleware("http")
+async def manager_auth_middleware(request, call_next):
+    cfg = get_runtime_config()
+    if not cfg.manager_auth_enabled:
+        return await call_next(request)
+    path = request.url.path
+    if not _is_manager_path(path) or _is_exempt(path):
+        return await call_next(request)
+    token = request.cookies.get(MANAGER_COOKIE)
+    ip = request.client.host if request.client else ""
+    if get_auth().verify_session_token(token, ip=ip):
+        return await call_next(request)
+    # Not authenticated. Decide between JSON 401 e redirect HTML.
+    accept = request.headers.get("accept", "")
+    is_html = "text/html" in accept and "application/json" not in accept
+    if is_html and request.method == "GET":
+        return Response(status_code=302, headers={"Location": "/m/login"})
+    return JSONResponse({"detail": "Authentication required"}, status_code=401)
 
 player = AudioPlayer()
 
@@ -39,7 +94,15 @@ MAX_UPLOAD_BYTES = 100 * 1024 * 1024  # 100 MB
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    """WebSocket endpoint for real-time state updates."""
+    """WebSocket endpoint for real-time state updates. Auth-protected when
+    manager_auth_enabled is True (cookie verificato nell'handshake)."""
+    cfg = get_runtime_config()
+    if cfg.manager_auth_enabled:
+        token = ws.cookies.get(MANAGER_COOKIE)
+        ip = ws.client.host if ws.client else ""
+        if not get_auth().verify_session_token(token, ip=ip):
+            await ws.close(code=4401)  # custom: unauthorized
+            return
     await ws.accept()
     queue = ws_manager.subscribe()
     try:
@@ -563,12 +626,383 @@ def spotify_search(q: str, limit: int = 10):
         raise HTTPException(status_code=503, detail=str(e))
 
 
+# --- Manager auth ---
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _set_session_cookie(response: Response, token: str, max_age: int | None, secure: bool) -> None:
+    response.set_cookie(
+        MANAGER_COOKIE,
+        token,
+        max_age=max_age,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+
+
+def _is_secure_request(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    # Cloudflare tunnel forwards original scheme via X-Forwarded-Proto / cf-visitor
+    if request.headers.get("x-forwarded-proto") == "https":
+        return True
+    return False
+
+
+@app.get("/m/auth-status")
+def manager_auth_status(request: Request):
+    auth = get_auth()
+    token = request.cookies.get(MANAGER_COOKIE)
+    cfg = get_runtime_config()
+    if not cfg.manager_auth_enabled:
+        authenticated = True
+    else:
+        ip = _client_ip(request)
+        authenticated = bool(auth.verify_session_token(token, ip=ip))
+    return {
+        "auth_enabled": cfg.manager_auth_enabled,
+        "configured": auth.is_configured(),
+        "authenticated": authenticated,
+    }
+
+
+@app.post("/m/setup")
+async def manager_setup(request: Request):
+    auth = get_auth()
+    if auth.is_configured():
+        raise HTTPException(status_code=409, detail="Password gia' configurata")
+    body = await request.json()
+    password = (body or {}).get("password", "")
+    try:
+        auth.set_password(password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    ua = request.headers.get("user-agent", "")
+    ip = _client_ip(request)
+    token, max_age = auth.make_session(remember=True, user_agent=ua, ip=ip)
+    response = JSONResponse({"status": "configured"})
+    _set_session_cookie(response, token, max_age, _is_secure_request(request))
+    return response
+
+
+@app.post("/m/login")
+async def manager_login(request: Request):
+    auth = get_auth()
+    if not auth.is_configured():
+        raise HTTPException(status_code=409, detail="Password non configurata. Apri /m/login per il setup.")
+    ip = _client_ip(request)
+    cooldown = auth.check_rate_limit(ip)
+    if cooldown is not None:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Troppi tentativi. Riprova tra {cooldown} secondi.",
+            headers={"Retry-After": str(cooldown)},
+        )
+    body = await request.json()
+    password = (body or {}).get("password", "")
+    remember = bool((body or {}).get("remember", False))
+    if not auth.verify_password(password):
+        auth.record_login_attempt(ip, ok=False)
+        raise HTTPException(status_code=401, detail="Password errata")
+    auth.record_login_attempt(ip, ok=True)
+    ua = request.headers.get("user-agent", "")
+    token, max_age = auth.make_session(remember=remember, user_agent=ua, ip=ip)
+    response = JSONResponse({"status": "ok"})
+    _set_session_cookie(response, token, max_age, _is_secure_request(request))
+    return response
+
+
+@app.post("/m/logout")
+def manager_logout(request: Request):
+    """Logout: rimuove la sessione corrente dallo store + clear cookie."""
+    token = request.cookies.get(MANAGER_COOKIE)
+    if token and "." in token:
+        try:
+            sid = token.split(".", 1)[0]
+            get_auth().revoke_session(sid)
+        except Exception:
+            pass
+    response = JSONResponse({"status": "logged_out"})
+    response.delete_cookie(MANAGER_COOKIE, path="/")
+    return response
+
+
+@app.get("/m/sessions")
+def manager_sessions_list(request: Request):
+    """Elenco delle sessioni attive con flag `current`."""
+    auth = get_auth()
+    token = request.cookies.get(MANAGER_COOKIE)
+    current_id = None
+    if token and "." in token:
+        current_id = token.split(".", 1)[0]
+    sessions = []
+    for s in auth.list_sessions():
+        sessions.append({
+            "id": s["id"],
+            "ua_label": s.get("ua_label", "Sconosciuto"),
+            "ip_last": s.get("ip_last", ""),
+            "last_seen": s.get("last_seen"),
+            "created_at": s.get("created_at"),
+            "expires_at": s.get("expires_at"),
+            "remember": s.get("remember", False),
+            "current": s["id"] == current_id,
+        })
+    return {"sessions": sessions}
+
+
+@app.delete("/m/sessions/{sid}")
+def manager_session_revoke(sid: str, request: Request):
+    """Revoca una sessione specifica. La sessione corrente è bloccata
+    (l'utente deve usare Logout)."""
+    token = request.cookies.get(MANAGER_COOKIE)
+    if token and token.split(".", 1)[0] == sid:
+        raise HTTPException(
+            status_code=400,
+            detail="Per chiudere la tua sessione usa Logout.",
+        )
+    if not get_auth().revoke_session(sid):
+        raise HTTPException(status_code=404, detail="Sessione non trovata")
+    return {"status": "revoked", "id": sid}
+
+
+@app.delete("/m/sessions")
+def manager_sessions_revoke_bulk(request: Request, keep_current: bool = False):
+    """Bulk revoke. keep_current=true → mantiene la corrente."""
+    keep_id = None
+    if keep_current:
+        token = request.cookies.get(MANAGER_COOKIE)
+        if token and "." in token:
+            keep_id = token.split(".", 1)[0]
+    count = get_auth().revoke_all_except(keep_id)
+    return {"status": "revoked", "count": count}
+
+
+# --- Runtime config (admin-only for now; will be auth-protected) ---
+
+@app.get("/admin/config")
+def admin_config_get():
+    return get_runtime_config().as_dict()
+
+
+@app.patch("/admin/config")
+async def admin_config_patch(request: Request):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be a JSON object")
+    try:
+        return get_runtime_config().patch(body)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- Tunnel pubblico (cloudflared) ---
+
+@app.on_event("startup")
+async def _tunnel_autostart_hook():
+    """Se l'utente ha abilitato l'autostart, avvia il tunnel quando uvicorn
+    e' pronto (non prima: cloudflared deve poter contattare il backend)."""
+    cfg = get_runtime_config()
+    if cfg.tunnel_autostart:
+        try:
+            get_tunnel().start(local_port=settings.port)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("tunnel autostart failed: %s", e)
+
+
+@app.get("/admin/tunnel/status")
+def tunnel_status():
+    return get_tunnel().status()
+
+
+@app.post("/admin/tunnel/start")
+def tunnel_start():
+    if not get_runtime_config().manager_auth_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Tunnel non disponibile finche' l'autenticazione Manager e' disabilitata.",
+        )
+    return get_tunnel().start(local_port=settings.port)
+
+
+@app.post("/admin/tunnel/stop")
+def tunnel_stop():
+    return get_tunnel().stop()
+
+
+@app.get("/admin/tunnel/qr.svg")
+def tunnel_qr():
+    """Generate an SVG QR code for the current public URL."""
+    state = get_tunnel().status()
+    url = state.get("url")
+    if not url:
+        raise HTTPException(status_code=404, detail="Tunnel non attivo")
+    import qrcode
+    import qrcode.image.svg
+    img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage, box_size=10, border=2)
+    import io
+    buf = io.BytesIO()
+    img.save(buf)
+    svg = buf.getvalue()
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "no-cache, no-store"},
+    )
+
+
+# --- Pending requests (manager view + approve/reject) ---
+
+@app.get("/pending")
+def pending_list():
+    return {"items": [p.model_dump() for p in player.get_pending()]}
+
+
+@app.post("/pending/{pid}/approve")
+def pending_approve(pid: int):
+    try:
+        track = player.approve_pending(pid)
+        return {"approved": track.model_dump()}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/pending/{pid}")
+def pending_reject(pid: int):
+    try:
+        player.reject_pending(pid)
+        return {"status": "rejected", "id": pid}
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# --- Public interface (subset, governed by runtime_config) ---
+
+PUBLIC_COOKIE = "discobot_pid"
+
+
+def _public_id(request: Request, response: Response) -> str:
+    """Get-or-create the public requester UUID, stored in cookie."""
+    pid = request.cookies.get(PUBLIC_COOKIE)
+    if not pid:
+        pid = _uuid.uuid4().hex
+        response.set_cookie(
+            PUBLIC_COOKIE, pid,
+            max_age=60 * 60 * 24 * 365,  # 1y
+            httponly=False,  # frontend reads it for "le mie richieste" filter
+            samesite="lax",
+        )
+    return pid
+
+
+@app.get("/public/config")
+def public_config():
+    return get_runtime_config().public_view()
+
+
+@app.get("/public/state")
+def public_state():
+    s = player.get_state()
+    return {
+        "current_track": s.current_track.model_dump() if s.current_track else None,
+        "queue": [t.model_dump() for t in s.queue],
+        "is_playing": s.is_playing,
+        "position": s.position,
+        "duration": s.duration,
+    }
+
+
+@app.get("/public/search")
+async def public_search(q: str, limit: int = 10, offset: int = 0):
+    """Like /search but limited to the sources enabled for the public."""
+    cfg = get_runtime_config()
+    if not cfg.public_enabled:
+        raise HTTPException(status_code=503, detail="Interfaccia pubblica disattivata")
+    enabled = [k for k, v in cfg.public_view()["sources"].items() if v]
+    if not enabled:
+        return {"local": [], "youtube": [], "spotify": [], "soundcloud": [],
+                "offset": offset, "limit": limit}
+    # Riusa la logica di unified_search via il suo handler
+    return await unified_search(q=q, limit=limit, offset=offset, sources=",".join(enabled))
+
+
+@app.post("/public/queue/add")
+async def public_queue_add(request: Request, response: Response):
+    cfg = get_runtime_config()
+    if not cfg.public_enabled:
+        raise HTTPException(status_code=503, detail="Interfaccia pubblica disattivata")
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+    path = body.get("path")
+    type_ = body.get("type")
+    name = (body.get("requester_name") or "").strip()[:30]
+    if not path or not type_:
+        raise HTTPException(status_code=400, detail="path e type sono richiesti")
+    if not cfg.is_source_enabled_for_public(type_):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Sorgente '{type_}' non disponibile per il pubblico",
+        )
+    pid = _public_id(request, response)
+    try:
+        req = TrackRequest(path=path, type=type_)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Richiesta non valida: {e}")
+
+    if cfg.public_require_approval:
+        try:
+            entry = player.add_pending(
+                req,
+                requester_name=name,
+                requester_id=pid,
+                preview_title=body.get("preview_title"),
+            )
+            return {"status": "pending", "pending": entry.model_dump()}
+        except ValueError as e:
+            raise HTTPException(status_code=429, detail=str(e))
+    else:
+        try:
+            track = player.add_public_direct(req, requester_id=pid)
+            return {"status": "queued", "track": track.model_dump()}
+        except ValueError as e:
+            raise HTTPException(status_code=429, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/public/my-pending")
+def public_my_pending(request: Request, response: Response):
+    pid = _public_id(request, response)
+    return {"items": [p.model_dump() for p in player.get_pending_for_requester(pid)]}
+
+
 # --- Web UI ---
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/")
-def serve_ui():
-    """Serve the web UI."""
+def serve_public_ui():
+    """Public-facing interface. Limited subset of features, governed by
+    runtime_config.public_enabled. Default landing — un attaccante che prova
+    la root trova solo questa, non il pannello manager."""
+    return FileResponse("static/public.html")
+
+
+@app.get("/m")
+def serve_manager_ui():
+    """Manager control panel. Protected by manager_auth_middleware."""
     return FileResponse("static/index.html")
+
+
+@app.get("/m/login")
+def serve_manager_login():
+    """Setup wizard + login page. Esente dall'auth middleware."""
+    return FileResponse("static/login.html")

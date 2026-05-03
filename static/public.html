@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0e0e10">
+    <title>DiscoBot — Richieste</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <script>
+        (function() {
+            try {
+                var saved = localStorage.getItem('theme');
+                var t = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {}
+        })();
+    </script>
+</head>
+<body x-data="discoBotPublic()" x-init="init()">
+
+<header class="app-header">
+    <div class="brand">DISCOBOT<span class="brand-version">/PUBLIC</span></div>
+    <div class="status-row">
+        <span class="status-pill" :class="{connected: connected}" title="Connessione">
+            <span class="status-dot"></span>
+            <span x-text="connected ? 'ON' : 'OFF'"></span>
+        </span>
+    </div>
+    <div class="header-spacer"></div>
+    <button class="icon-btn" x-show="config.enabled" @click="openNameDialog()" :title="'Stai usando: ' + displayName">
+        <svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="/static/icons.svg#info"/></svg>
+        <span class="mono" style="font-size:11px;text-transform:uppercase;letter-spacing:.05em" x-text="displayName"></span>
+    </button>
+    <button class="icon-btn" @click="toggleTheme()" :aria-label="theme === 'dark' ? 'Tema chiaro' : 'Tema scuro'">
+        <svg class="icon" x-show="theme === 'dark'"><use href="/static/icons.svg#sun"/></svg>
+        <svg class="icon" x-show="theme === 'light'"><use href="/static/icons.svg#moon"/></svg>
+    </button>
+</header>
+
+<div class="toast-stack" aria-live="polite" aria-atomic="false">
+    <template x-for="t in toasts.items" :key="t.id">
+        <div class="toast" :class="t.type" @click="toasts.dismiss(t.id)">
+            <svg class="icon icon-sm">
+                <use :href="'/static/icons.svg#' + (t.type === 'error' ? 'x' : t.type === 'warning' ? 'info' : 'check')"/>
+            </svg>
+            <span class="toast-msg" x-text="t.msg"></span>
+        </div>
+    </template>
+</div>
+
+<main class="app-main" style="max-width: 720px;">
+
+    <!-- DISABILITATO -->
+    <div class="card" x-show="!config.enabled" style="text-align:center; padding: var(--sp-8) var(--sp-4);">
+        <svg class="icon icon-lg muted" style="width:48px;height:48px"><use href="/static/icons.svg#info"/></svg>
+        <h2 style="margin: var(--sp-3) 0 var(--sp-2); font-size: 18px; color: var(--text-primary);">Interfaccia richieste disattivata</h2>
+        <p class="muted" style="margin:0">Il DJ ha disabilitato le richieste dal pubblico.</p>
+    </div>
+
+    <!-- ABILITATO -->
+    <div x-show="config.enabled" class="flex-col" style="gap: var(--sp-4)">
+
+        <!-- NOW PLAYING (read-only) -->
+        <div class="card now-playing">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#music"/></svg>
+                    In riproduzione
+                </h2>
+            </div>
+            <div class="np-body">
+                <div class="np-cover">
+                    <template x-if="player.track && player.track.cover_url">
+                        <img :src="player.track.cover_url" :alt="player.track.title" loading="lazy" @error="$event.target.style.display='none'">
+                    </template>
+                    <template x-if="!player.track || !player.track.cover_url">
+                        <svg class="icon icon-lg"><use href="/static/icons.svg#music"/></svg>
+                    </template>
+                    <template x-if="player.track">
+                        <span class="np-source-badge" x-text="sourceLabel(player.track.type)"></span>
+                    </template>
+                </div>
+                <div class="np-info">
+                    <div class="np-meta">
+                        <div class="np-title" :title="player.track ? player.track.title : ''" x-text="player.track ? player.track.title : 'Nessuna traccia'"></div>
+                        <div class="np-artist" :title="player.track ? formatArtist(player.track) : ''" x-text="player.track ? formatArtist(player.track) : ''"></div>
+                    </div>
+                    <div class="np-progress">
+                        <div class="np-progress-bar" style="cursor: default">
+                            <div class="np-progress-fill" :style="`width: ${player.duration > 0 ? (player.position / player.duration * 100) : 0}%`"></div>
+                        </div>
+                        <span class="np-time-inline mono">
+                            <span x-text="formatTime(player.position)"></span><span class="muted">/</span><span x-text="formatTime(player.duration)"></span>
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- LE MIE RICHIESTE -->
+        <div class="card" x-show="config.require_approval && myPending.length > 0">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#info"/></svg>
+                    Le mie richieste
+                    <span class="badge" x-text="myPending.length"></span>
+                </h2>
+            </div>
+            <ul class="list">
+                <template x-for="p in myPending" :key="'mp:' + p.id">
+                    <li>
+                        <span class="source-tag" :class="'source-' + sourceClass(p.track_request.type)" x-text="sourceLabel(p.track_request.type)"></span>
+                        <div class="name">
+                            <strong x-text="p.preview_title || p.track_request.path"></strong>
+                            <small x-text="'in attesa di approvazione · ' + formatRelativeTime(p.submitted_at)"></small>
+                        </div>
+                        <span class="status-dot warming"></span>
+                    </li>
+                </template>
+            </ul>
+        </div>
+
+        <!-- CERCA -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#search"/></svg>
+                    Richiedi un brano
+                </h2>
+            </div>
+            <div class="input-row">
+                <div class="input-icon" style="flex:1">
+                    <svg class="icon"><use href="/static/icons.svg#search"/></svg>
+                    <input type="search" x-model="search.q" @keydown.enter="doSearch()" placeholder="Titolo, artista...">
+                </div>
+                <button class="btn btn-primary" @click="doSearch()">Cerca</button>
+            </div>
+
+            <div x-show="search.loading" class="flex-col">
+                <div class="skeleton"></div>
+                <div class="skeleton"></div>
+                <div class="skeleton"></div>
+            </div>
+
+            <template x-if="!search.loading && search.tabs.length > 0">
+                <div>
+                    <div class="tab-pill" style="background:transparent; border:0; padding:0; margin-bottom: var(--sp-2)">
+                        <template x-for="tab in search.tabs" :key="tab.key">
+                            <button :class="{active: search.activeTab === tab.key}" @click="search.activeTab = tab.key">
+                                <span x-text="tab.label"></span>
+                                <span style="opacity:.5;margin-left:4px" x-text="`(${tab.items.length})`"></span>
+                            </button>
+                        </template>
+                    </div>
+                    <ul class="list list-scroll">
+                        <template x-for="item in currentSearchItems" :key="item._key">
+                            <li>
+                                <span class="source-tag" :class="'source-' + sourceClass(search.activeTab)" x-text="sourceLabel(search.activeTab)"></span>
+                                <div class="name">
+                                    <strong x-text="item.title" :title="item.title"></strong>
+                                    <small x-text="formatSearchSubtitle(item, search.activeTab)"></small>
+                                </div>
+                                <span class="duration" x-text="fmtDuration(item.duration_ms)"></span>
+                                <div class="actions">
+                                    <button class="add" @click="requestItem(item, search.activeTab)" :aria-label="config.require_approval ? 'Richiedi' : 'Aggiungi'" :title="config.require_approval ? 'Richiedi al DJ' : 'Aggiungi alla coda'">
+                                        <svg class="icon icon-sm"><use href="/static/icons.svg#plus"/></svg>
+                                    </button>
+                                </div>
+                            </li>
+                        </template>
+                    </ul>
+                    <div class="load-more" x-show="hasMore">
+                        <button class="btn btn-secondary btn-sm"
+                                :disabled="search.loadingMore"
+                                @click="loadMore()">
+                            <span x-text="search.loadingMore ? 'Caricamento...' : `Carica altri (${currentSearchItems.length} mostrati)`"></span>
+                        </button>
+                    </div>
+                </div>
+            </template>
+
+            <div class="search-empty" x-show="!search.loading && search.searched && search.tabs.length === 0">
+                Nessun risultato trovato
+            </div>
+            <div class="hint" x-show="config.require_approval">
+                Le richieste vengono prima approvate dal DJ.
+            </div>
+        </div>
+
+        <!-- CODA (read-only) -->
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#list-music"/></svg>
+                    Prossime in coda
+                    <span class="badge" x-text="queue.length"></span>
+                </h2>
+            </div>
+            <ul class="list list-scroll">
+                <template x-if="queue.length === 0">
+                    <li class="empty">La coda è vuota</li>
+                </template>
+                <template x-for="(t, i) in queue" :key="'q:' + t.id">
+                    <li>
+                        <span class="index mono" x-text="String(i + 1).padStart(2, '0')"></span>
+                        <span class="source-tag" :class="'source-' + sourceClass(t.type)" x-text="sourceLabel(t.type)"></span>
+                        <div class="name">
+                            <strong x-text="t.title" :title="t.title"></strong>
+                            <template x-if="t.artist"><small x-text="t.artist"></small></template>
+                        </div>
+                    </li>
+                </template>
+            </ul>
+        </div>
+    </div>
+</main>
+
+<!-- Dialog imposta nome -->
+<dialog id="nameDialog" @click="$event.target === $el && closeNameDialog()" @close="closeNameDialog()">
+    <div class="dialog-header">
+        <h2 x-text="firstVisit ? 'Benvenuto su DiscoBot' : 'Il tuo nome'"></h2>
+        <button class="icon-btn" @click="closeNameDialog()" aria-label="Chiudi">
+            <svg class="icon"><use href="/static/icons.svg#x"/></svg>
+        </button>
+    </div>
+    <div class="dialog-body">
+        <div class="hint">
+            <template x-if="firstVisit">
+                <span>Inserisci il tuo nome così il DJ saprà chi ha richiesto un brano. Puoi sempre continuare in modo anonimo.</span>
+            </template>
+            <template x-if="!firstVisit">
+                <span>Opzionale. Usato dal DJ per distinguere le tue richieste. Se vuoto, comparirai come "Anonimo".</span>
+            </template>
+        </div>
+        <input type="text" maxlength="30" x-model="nameInput" @keydown.enter="saveName()" placeholder="Es. Marco" autofocus>
+        <div class="flex-row">
+            <button class="btn btn-primary" @click="saveName()" x-text="firstVisit ? 'Continua' : 'Salva'"></button>
+            <button class="btn btn-secondary" @click="clearName()" x-text="firstVisit ? 'Continua come Anonimo' : 'Anonimo'"></button>
+        </div>
+    </div>
+</dialog>
+
+<script src="/static/public.js" defer></script>
+<script src="/static/vendor/alpinejs.min.js" defer></script>
+</body>
+</html>

@@ -37,9 +37,31 @@
                 unauthenticated: !spotify.authed || spotify.failed
               }"
               :title="spotifyStatusLabel"
-              @click="openSettings()">
+              @click="openSettingsAt('spotify')">
             <span class="status-dot"></span>
             <span>SPOT</span>
+        </span>
+        <span class="status-pill"
+              data-clickable="true"
+              :class="{
+                connected: runtimeConfig.public_enabled && pending.length === 0,
+                warming: runtimeConfig.public_enabled && pending.length > 0,
+                unauthenticated: !runtimeConfig.public_enabled
+              }"
+              :title="runtimeConfig.public_enabled ? `Interfaccia pubblica attiva${pending.length ? ' · ' + pending.length + ' richieste' : ''}` : 'Interfaccia pubblica disabilitata'"
+              @click="openSettingsAt('public')">
+            <span class="status-dot"></span>
+            <span>PUB</span>
+            <span x-show="pending.length > 0" class="badge" style="margin-left:4px" x-text="pending.length"></span>
+        </span>
+        <span class="status-pill"
+              x-show="tunnel.running || tunnel.error"
+              data-clickable="true"
+              :class="{ connected: tunnel.running && tunnel.url, warming: tunnel.running && !tunnel.url, unauthenticated: tunnel.error }"
+              :title="tunnel.url ? 'Accesso remoto: ' + tunnel.url : (tunnel.error || 'Tunnel in avvio...')"
+              @click="openSettingsAt('remote')">
+            <span class="status-dot"></span>
+            <span>REM</span>
         </span>
     </div>
 
@@ -398,8 +420,39 @@
 
     </section>
 
-    <!-- =============== COL RIGHT — QUEUE =============== -->
+    <!-- =============== COL RIGHT — PENDING + QUEUE =============== -->
     <section class="col col-right" data-mobile-hidden :data-active="activeTab === 'queue' || null">
+
+        <!-- RICHIESTE DEL PUBBLICO -->
+        <div class="card" x-show="runtimeConfig.public_enabled && runtimeConfig.public_require_approval && pending.length > 0">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm" style="color: var(--signal)"><use href="/static/icons.svg#info"/></svg>
+                    Richieste del pubblico
+                    <span class="badge" x-text="pending.length"></span>
+                </h2>
+            </div>
+            <ul class="list">
+                <template x-for="p in pending" :key="'pn:' + p.id">
+                    <li>
+                        <span class="source-tag" :class="'source-' + sourceClass(p.track_request.type)" x-text="sourceLabel(p.track_request.type)"></span>
+                        <div class="name">
+                            <strong x-text="p.preview_title || p.track_request.path" :title="p.preview_title || p.track_request.path"></strong>
+                            <small x-text="p.requester_name + ' · ' + formatRelativeTime(p.submitted_at)"></small>
+                        </div>
+                        <div class="actions">
+                            <button class="add" @click="approvePending(p.id)" title="Approva" aria-label="Approva">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#check"/></svg>
+                            </button>
+                            <button class="danger" @click="rejectPending(p.id)" title="Rifiuta" aria-label="Rifiuta">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#x"/></svg>
+                            </button>
+                        </div>
+                    </li>
+                </template>
+            </ul>
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <h2 class="card-title">
@@ -477,73 +530,268 @@
 </nav>
 
 <!-- ============================ SETTINGS DIALOG ============================ -->
-<dialog id="settingsDialog" @click="$event.target === $el && closeSettings()">
+<dialog id="settingsDialog" class="settings-dialog" @click="$event.target === $el && closeSettings()">
     <div class="dialog-header">
         <h2>Impostazioni</h2>
         <button class="icon-btn" @click="closeSettings()" aria-label="Chiudi">
             <svg class="icon"><use href="/static/icons.svg#x"/></svg>
         </button>
     </div>
-    <div class="dialog-body">
+    <div class="settings-layout">
 
-        <div class="dialog-section">
-            <h3>Tema</h3>
-            <div class="flex-row">
-                <button class="btn" :class="theme === 'dark' ? 'btn-primary' : ''" @click="setTheme('dark')">
-                    <svg class="icon icon-sm"><use href="/static/icons.svg#moon"/></svg> Scuro
-                </button>
-                <button class="btn" :class="theme === 'light' ? 'btn-primary' : ''" @click="setTheme('light')">
-                    <svg class="icon icon-sm"><use href="/static/icons.svg#sun"/></svg> Chiaro
-                </button>
-            </div>
-        </div>
+        <!-- ===== Sidebar nav ===== -->
+        <nav class="settings-nav" role="tablist" aria-label="Sezioni impostazioni">
+            <button class="settings-nav-item" :aria-selected="settingsActiveSection === 'security'" @click="settingsActiveSection = 'security'">
+                <svg class="icon icon-sm"><use href="/static/icons.svg#settings"/></svg>
+                Sicurezza
+            </button>
+            <button class="settings-nav-item" :aria-selected="settingsActiveSection === 'public'" @click="settingsActiveSection = 'public'">
+                <svg class="icon icon-sm"><use href="/static/icons.svg#list-music"/></svg>
+                Pubblico
+            </button>
+            <button class="settings-nav-item" :aria-selected="settingsActiveSection === 'remote'" @click="settingsActiveSection = 'remote'">
+                <svg class="icon icon-sm"><use href="/static/icons.svg#upload"/></svg>
+                Accesso remoto
+            </button>
+            <button class="settings-nav-item" :aria-selected="settingsActiveSection === 'spotify'" @click="settingsActiveSection = 'spotify'">
+                <svg class="icon icon-sm"><use href="/static/icons.svg#music"/></svg>
+                Spotify
+            </button>
+            <button class="settings-nav-item" :aria-selected="settingsActiveSection === 'theme'" @click="settingsActiveSection = 'theme'">
+                <svg class="icon icon-sm"><use href="/static/icons.svg#sun"/></svg>
+                Tema
+            </button>
+            <span class="settings-nav-spacer"></span>
+            <button class="settings-nav-item danger" @click="logout()" x-show="runtimeConfig.manager_auth_enabled">
+                <svg class="icon icon-sm"><use href="/static/icons.svg#x"/></svg>
+                Esci
+            </button>
+        </nav>
 
-        <div class="dialog-section">
-            <h3>Spotify</h3>
-            <div class="auth-row">
-                <span class="status-dot" :class="{
-                    authenticated: spotify.ready,
-                    warming: spotify.warming,
-                    unauthenticated: !spotify.authed || spotify.failed
-                }" style="background: var(--text-muted);
-                          background: var(--text-muted) !important;
-                "></span>
-                <!-- inline status pill style for the dot -->
-                <span x-text="spotifyStatusLabel"></span>
-            </div>
+        <!-- ===== Content panes ===== -->
+        <div class="settings-content">
 
-            <template x-if="!spotify.authed && !spotify.zeroconf?.running">
-                <div class="flex-col">
-                    <button class="btn btn-primary" @click="startSpotifyZeroconf()" :disabled="spotify.startingZeroconf">
-                        Login Spotify Connect
+            <!-- SICUREZZA -->
+            <section x-show="settingsActiveSection === 'security'" class="settings-section-body">
+                <h3>Sicurezza Manager</h3>
+                <label class="toggle-row">
+                    <input type="checkbox" :checked="runtimeConfig.manager_auth_enabled" @change="confirmAuthToggle($event)">
+                    <div>
+                        <div style="font-weight:500">Autenticazione Manager</div>
+                        <div class="hint" style="font-size:12px;margin-top:2px">Quando attiva, l'accesso a <code>/m</code> richiede la password.</div>
+                    </div>
+                </label>
+                <template x-if="!runtimeConfig.manager_auth_enabled">
+                    <div style="padding: var(--sp-3); border-radius: var(--r-sm); background: rgba(239,68,68,.12); border-left: 3px solid var(--error); font-size: 12px; color: var(--text-primary);">
+                        <strong style="color: var(--error)">Manager non protetto.</strong>
+                        Tunnel e interfaccia pubblica sono disabilitati e non riattivabili finché non riattivi l'autenticazione.
+                    </div>
+                </template>
+
+                <!-- SESSIONI ATTIVE -->
+                <div x-show="runtimeConfig.manager_auth_enabled" style="margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--border);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--sp-2)">
+                        <div style="font-weight:500">Sessioni attive</div>
+                        <button class="card-action" @click="refreshSessions()" title="Aggiorna">
+                            <svg class="icon icon-sm"><use href="/static/icons.svg#rotate-cw"/></svg>
+                        </button>
+                    </div>
+                    <ul class="list">
+                        <template x-if="sessions.length === 0">
+                            <li class="empty">Nessuna sessione attiva</li>
+                        </template>
+                        <template x-for="s in sessions" :key="'s:' + s.id">
+                            <li>
+                                <div class="name">
+                                    <strong>
+                                        <span x-text="s.ua_label"></span>
+                                        <template x-if="s.current">
+                                            <span class="badge" style="margin-left:6px;background:var(--accent-soft);color:var(--accent)">questo dispositivo</span>
+                                        </template>
+                                        <template x-if="s.remember && !s.current">
+                                            <span class="badge" style="margin-left:6px" title="Sessione persistente (Ricordami)">30g</span>
+                                        </template>
+                                    </strong>
+                                    <small>
+                                        <span class="mono" x-text="s.ip_last || '—'"></span>
+                                        · ultimo accesso <span x-text="formatRelativeTime(s.last_seen)"></span>
+                                    </small>
+                                </div>
+                                <div class="actions">
+                                    <button class="danger" @click="revokeSession(s.id)" :disabled="s.current" :title="s.current ? 'Per chiudere questa sessione usa Esci' : 'Revoca sessione'" aria-label="Revoca">
+                                        <svg class="icon icon-sm"><use href="/static/icons.svg#x"/></svg>
+                                    </button>
+                                </div>
+                            </li>
+                        </template>
+                    </ul>
+                    <button class="btn btn-secondary btn-sm" @click="revokeAllOthers()" x-show="sessions.length > 1" style="margin-top: var(--sp-2)">
+                        Esci da tutti gli altri dispositivi
                     </button>
-                    <div class="hint">
-                        Richiede un account Spotify Premium e che il telefono sia sulla stessa rete LAN del kiosk.
+                </div>
+            </section>
+
+            <!-- PUBBLICO -->
+            <section x-show="settingsActiveSection === 'public'" class="settings-section-body" :class="{disabled: !runtimeConfig.manager_auth_enabled}">
+                <h3>Interfaccia pubblica</h3>
+                <template x-if="!runtimeConfig.manager_auth_enabled">
+                    <div class="hint" style="color: var(--error)">
+                        Riattiva l'autenticazione Manager per usare questa sezione.
+                    </div>
+                </template>
+                <label class="toggle-row">
+                    <input type="checkbox" :checked="runtimeConfig.public_enabled" :disabled="!runtimeConfig.manager_auth_enabled" @change="patchConfig({public_enabled: $event.target.checked})">
+                    <div>
+                        <div style="font-weight:500">Abilita interfaccia pubblica</div>
+                        <div class="hint" style="font-size:12px;margin-top:2px">Disponibile su <code><span x-text="window.location.origin"></span>/</code></div>
+                    </div>
+                </label>
+                <label class="toggle-row" :style="runtimeConfig.public_enabled ? '' : 'opacity:.5'">
+                    <input type="checkbox" :checked="runtimeConfig.public_require_approval" :disabled="!runtimeConfig.public_enabled" @change="patchConfig({public_require_approval: $event.target.checked})">
+                    <div>
+                        <div style="font-weight:500">Richiedi approvazione</div>
+                        <div class="hint" style="font-size:12px;margin-top:2px">Le richieste vanno nella tua coda di approvazione invece di entrare direttamente in scaletta.</div>
+                    </div>
+                </label>
+                <div :style="runtimeConfig.public_enabled ? '' : 'opacity:.5;pointer-events:none'">
+                    <div class="hint" style="margin-bottom: var(--sp-2);font-weight:500;color:var(--text-primary)">Sorgenti disponibili al pubblico</div>
+                    <div class="flex-row" style="flex-wrap: wrap; gap: var(--sp-2)">
+                        <template x-for="src in ['local','youtube','spotify','soundcloud']" :key="src">
+                            <label class="btn btn-sm" :class="runtimeConfig.public_sources[src] ? 'btn-primary' : 'btn-secondary'" style="cursor:pointer">
+                                <input type="checkbox" :checked="runtimeConfig.public_sources[src]" @change="patchConfig({public_sources: {[src]: $event.target.checked}})" style="display:none">
+                                <span x-text="sourceLabel(src) + ' · ' + (src === 'local' ? 'File' : src === 'youtube' ? 'YouTube' : src === 'spotify' ? 'Spotify' : 'SoundCloud')"></span>
+                            </label>
+                        </template>
                     </div>
                 </div>
-            </template>
+            </section>
 
-            <template x-if="!spotify.authed && spotify.zeroconf?.running">
-                <div class="flex-col">
-                    <div class="flex-row" style="font-weight:500">
-                        <span class="spinner-inline"></span>
-                        <span>In attesa del login...</span>
+            <!-- ACCESSO REMOTO -->
+            <section x-show="settingsActiveSection === 'remote'" class="settings-section-body" :class="{disabled: !runtimeConfig.manager_auth_enabled}">
+                <h3>Accesso remoto</h3>
+                <div class="hint">
+                    Espone l'interfaccia pubblica su Internet via Cloudflare Quick Tunnel — nessun account, URL random ad ogni avvio.
+                </div>
+                <template x-if="!runtimeConfig.manager_auth_enabled">
+                    <div class="hint" style="color: var(--error)">
+                        Riattiva l'autenticazione Manager per usare il tunnel.
                     </div>
-                    <ol class="steps">
-                        <li>Apri l'app Spotify sul telefono (Premium)</li>
-                        <li>Tocca l'icona Dispositivi (in basso, vicino al brano)</li>
-                        <li>Seleziona <strong x-text="spotify.zeroconf?.device_name || 'DiscoBot'"></strong></li>
-                    </ol>
-                    <button class="btn btn-secondary btn-sm" @click="stopSpotifyZeroconf()">Annulla</button>
-                </div>
-            </template>
+                </template>
+                <template x-if="!tunnel.binary_present">
+                    <div class="hint" style="color: var(--error)">
+                        cloudflared non installato. Esegui <code>./setup.sh</code> per scaricarlo (~35 MB).
+                    </div>
+                </template>
+                <label class="toggle-row" :style="tunnel.binary_present ? '' : 'opacity:.5'">
+                    <input type="checkbox" :checked="runtimeConfig.tunnel_autostart" :disabled="!tunnel.binary_present" @change="patchConfig({tunnel_autostart: $event.target.checked})">
+                    <div>
+                        <div style="font-weight:500">Avvia automaticamente all'avvio di DiscoBot</div>
+                        <div class="hint" style="font-size:12px;margin-top:2px">Il tunnel parte da solo quando lanci <code>./run.sh</code>.</div>
+                    </div>
+                </label>
 
-            <template x-if="spotify.authed">
-                <div class="success-row">
-                    <svg class="icon icon-sm"><use href="/static/icons.svg#check"/></svg>
-                    Login completato
+                <template x-if="tunnel.binary_present && !tunnel.running">
+                    <div class="flex-col">
+                        <button class="btn btn-primary" @click="tunnelStart()" :disabled="tunnel.starting">
+                            <svg class="icon icon-sm"><use href="/static/icons.svg#upload"/></svg>
+                            <span x-text="tunnel.starting ? 'Avvio...' : 'Avvia tunnel pubblico'"></span>
+                        </button>
+                        <template x-if="tunnel.error">
+                            <div class="hint" style="color: var(--error)" x-text="tunnel.error"></div>
+                        </template>
+                    </div>
+                </template>
+
+                <template x-if="tunnel.running">
+                    <div class="flex-col">
+                        <template x-if="!tunnel.url">
+                            <div class="flex-row" style="gap: var(--sp-2)">
+                                <span class="spinner-inline"></span>
+                                <span class="hint" style="margin:0">Connessione in corso...</span>
+                            </div>
+                        </template>
+                        <template x-if="tunnel.url">
+                            <div class="flex-col">
+                                <div class="flex-row" style="gap: var(--sp-2)">
+                                    <input type="text" :value="tunnel.url" readonly @click="$event.target.select()" style="flex:1; font-family: var(--font-mono); font-size: 12px;">
+                                    <button class="btn btn-sm" @click="copyTunnelUrl()" title="Copia">
+                                        <svg class="icon icon-sm"><use href="/static/icons.svg#save"/></svg>
+                                        Copia
+                                    </button>
+                                </div>
+                                <div style="text-align:center; padding: var(--sp-3); background: var(--bg-base); border-radius: var(--r-md); border: 1px solid var(--border);">
+                                    <img :src="`/admin/tunnel/qr.svg?t=${tunnel.url}`" alt="QR code" style="max-width: 220px; width: 100%; height: auto;">
+                                    <div class="hint" style="margin-top: var(--sp-2)">Scansiona col telefono</div>
+                                </div>
+                            </div>
+                        </template>
+                        <button class="btn btn-secondary" @click="tunnelStop()">
+                            <svg class="icon icon-sm"><use href="/static/icons.svg#x"/></svg>
+                            Ferma tunnel
+                        </button>
+                    </div>
+                </template>
+            </section>
+
+            <!-- SPOTIFY -->
+            <section x-show="settingsActiveSection === 'spotify'" class="settings-section-body">
+                <h3>Spotify</h3>
+                <div class="auth-row">
+                    <span class="status-dot" :class="{
+                        authenticated: spotify.ready,
+                        warming: spotify.warming,
+                        unauthenticated: !spotify.authed || spotify.failed
+                    }"></span>
+                    <span x-text="spotifyStatusLabel"></span>
                 </div>
-            </template>
+
+                <template x-if="!spotify.authed && !spotify.zeroconf?.running">
+                    <div class="flex-col">
+                        <button class="btn btn-primary" @click="startSpotifyZeroconf()" :disabled="spotify.startingZeroconf">
+                            Login Spotify Connect
+                        </button>
+                        <div class="hint">
+                            Richiede un account Spotify Premium e che il telefono sia sulla stessa rete LAN del kiosk.
+                        </div>
+                    </div>
+                </template>
+
+                <template x-if="!spotify.authed && spotify.zeroconf?.running">
+                    <div class="flex-col">
+                        <div class="flex-row" style="font-weight:500">
+                            <span class="spinner-inline"></span>
+                            <span>In attesa del login...</span>
+                        </div>
+                        <ol class="steps">
+                            <li>Apri l'app Spotify sul telefono (Premium)</li>
+                            <li>Tocca l'icona Dispositivi (in basso, vicino al brano)</li>
+                            <li>Seleziona <strong x-text="spotify.zeroconf?.device_name || 'DiscoBot'"></strong></li>
+                        </ol>
+                        <button class="btn btn-secondary btn-sm" @click="stopSpotifyZeroconf()">Annulla</button>
+                    </div>
+                </template>
+
+                <template x-if="spotify.authed">
+                    <div class="success-row">
+                        <svg class="icon icon-sm"><use href="/static/icons.svg#check"/></svg>
+                        Login completato
+                    </div>
+                </template>
+            </section>
+
+            <!-- TEMA -->
+            <section x-show="settingsActiveSection === 'theme'" class="settings-section-body">
+                <h3>Tema</h3>
+                <div class="flex-row">
+                    <button class="btn" :class="theme === 'dark' ? 'btn-primary' : ''" @click="setTheme('dark')">
+                        <svg class="icon icon-sm"><use href="/static/icons.svg#moon"/></svg> Scuro
+                    </button>
+                    <button class="btn" :class="theme === 'light' ? 'btn-primary' : ''" @click="setTheme('light')">
+                        <svg class="icon icon-sm"><use href="/static/icons.svg#sun"/></svg> Chiaro
+                    </button>
+                </div>
+            </section>
+
         </div>
     </div>
 </dialog>
