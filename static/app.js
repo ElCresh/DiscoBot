@@ -1,738 +1,759 @@
-let trackType = 'local';
-let isPlaying = false;
-let currentShuffle = false;
-let currentRepeat = 'off';
-let currentNormalize = true;
-let ws = null;
-let wsReconnectTimer = null;
+// =====================================================================
+// DiscoBot — Alpine root + API actions
+// =====================================================================
 
-// --- WebSocket ---
-function connectWebSocket() {
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${protocol}//${location.host}/ws`);
-    ws.onopen = () => {
-        document.getElementById('wsStatus').classList.add('connected');
-        if (wsReconnectTimer) { clearInterval(wsReconnectTimer); wsReconnectTimer = null; }
-    };
-    ws.onmessage = (event) => {
-        const state = JSON.parse(event.data);
-        applyState(state);
-    };
-    ws.onclose = () => {
-        document.getElementById('wsStatus').classList.remove('connected');
-        if (!wsReconnectTimer) {
-            wsReconnectTimer = setInterval(() => {
-                if (!ws || ws.readyState === WebSocket.CLOSED) connectWebSocket();
-            }, 3000);
-        }
-    };
-    ws.onerror = () => ws.close();
-}
+function discoBot() {
+    return {
+        // ---- player state (mirrors WS) ----
+        player: {
+            isPlaying: false,
+            track: null,
+            position: 0,
+            duration: 0,
+            volume: 80,
+            shuffle: false,
+            repeat: 'off',
+            normalize: true,
+        },
+        queue: [],
 
-// Fallback polling for position updates (WS doesn't push these continuously)
-setInterval(async () => {
-    try {
-        const state = await api('/player/state');
-        // Only update time-sensitive fields, not the full UI
-        document.getElementById('currentTime').textContent = formatTime(state.position);
-        document.getElementById('totalTime').textContent = formatTime(state.duration);
-        const pct = state.duration > 0 ? (state.position / state.duration * 100) : 0;
-        document.getElementById('progressFill').style.width = pct + '%';
-        isPlaying = state.is_playing;
-        document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#9208;' : '&#9654;';
-    } catch (e) {}
-}, 1000);
+        // ---- ws ----
+        ws: { connected: false, _socket: null, _reconnect: null },
 
-function applyState(state) {
-    isPlaying = state.is_playing;
+        // ---- spotify ----
+        spotify: {
+            authed: false,
+            ready: false,
+            warming: false,
+            failed: false,
+            zeroconf: null,
+            startingZeroconf: false,
+            _fastPoll: null,
+            _slowPoll: null,
+        },
 
-    // Now playing
-    const track = state.current_track;
-    const title = track ? track.title : 'Nessuna traccia';
-    document.getElementById('trackTitle').textContent = title;
-
-    // Artist / album info
-    const artistEl = document.getElementById('artistInfo');
-    if (track && (track.artist || track.album)) {
-        const parts = [];
-        if (track.artist) parts.push(track.artist);
-        if (track.album) parts.push(track.album);
-        artistEl.textContent = parts.join(' — ');
-    } else {
-        artistEl.textContent = '';
-    }
-
-    document.getElementById('currentTime').textContent = formatTime(state.position);
-    document.getElementById('totalTime').textContent = formatTime(state.duration);
-    document.getElementById('playPauseBtn').innerHTML = isPlaying ? '&#9208;' : '&#9654;';
-
-    // Progress
-    const pct = state.duration > 0 ? (state.position / state.duration * 100) : 0;
-    document.getElementById('progressFill').style.width = pct + '%';
-
-    // Volume
-    document.getElementById('volumeSlider').value = state.volume;
-    document.getElementById('volumeLabel').textContent = state.volume;
-
-    // Shuffle & Repeat
-    currentShuffle = state.shuffle;
-    currentRepeat = state.repeat;
-    document.getElementById('shuffleBtn').classList.toggle('active', currentShuffle);
-    const repeatBtn = document.getElementById('repeatBtn');
-    repeatBtn.classList.toggle('active', currentRepeat !== 'off');
-    const repeatSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>';
-    if (currentRepeat === 'one') {
-        repeatBtn.innerHTML = repeatSvg + '<small style="font-size:0.6em;margin-left:-2px;">1</small>';
-    } else {
-        repeatBtn.innerHTML = repeatSvg;
-    }
-
-    // Auto-livellamento (normalize)
-    currentNormalize = state.normalize !== false;
-    document.getElementById('normalizeBtn').classList.toggle('active', currentNormalize);
-
-    // Queue
-    renderQueue(state.queue);
-    refreshHistory();
-}
-
-function setType(type) {
-    trackType = type;
-    document.getElementById('btnLocal').classList.toggle('active', type === 'local');
-    document.getElementById('btnYoutube').classList.toggle('active', type === 'youtube');
-    document.getElementById('btnSpotify').classList.toggle('active', type === 'spotify');
-    document.getElementById('btnSoundcloud').classList.toggle('active', type === 'soundcloud');
-    document.getElementById('youtubeInput').style.display = type === 'youtube' ? 'block' : 'none';
-    document.getElementById('localInput').style.display = type === 'local' ? 'block' : 'none';
-    document.getElementById('spotifyInput').style.display = type === 'spotify' ? 'block' : 'none';
-    document.getElementById('soundcloudInput').style.display = type === 'soundcloud' ? 'block' : 'none';
-}
-
-async function api(url, method = 'GET', body = null) {
-    const opts = { method };
-    if (body) {
-        opts.headers = { 'Content-Type': 'application/json' };
-        opts.body = JSON.stringify(body);
-    }
-    const res = await fetch(url, opts);
-    return res.json();
-}
-
-let currentMediaPath = '';
-
-function escapeAttr(s) {
-    return s.replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
-}
-
-function renderMediaBreadcrumb(path) {
-    const crumbs = ['<span class="crumb" onclick="navigateMedia(\'\')">media</span>'];
-    const parts = path.split('/').filter(Boolean);
-    let acc = '';
-    parts.forEach((p, i) => {
-        acc = acc ? acc + '/' + p : p;
-        crumbs.push('<span class="sep">/</span>');
-        if (i === parts.length - 1) {
-            crumbs.push(`<span style="color:#fff;">${p}</span>`);
-        } else {
-            crumbs.push(`<span class="crumb" onclick="navigateMedia('${escapeAttr(acc)}')">${p}</span>`);
-        }
-    });
-    document.getElementById('mediaBreadcrumb').innerHTML = crumbs.join('');
-}
-
-async function refreshMedia() {
-    try {
-        const data = await api('/media/list?path=' + encodeURIComponent(currentMediaPath));
-        renderMediaBreadcrumb(data.path);
-        const list = document.getElementById('mediaList');
-        const items = [];
-
-        if (data.parent !== null) {
-            items.push(
-                `<li class="dir" onclick="navigateMedia('${escapeAttr(data.parent)}')">
-                    <span>..</span>
-                </li>`
-            );
-        }
-        data.dirs.forEach(d => {
-            const childPath = data.path ? data.path + '/' + d : d;
-            items.push(
-                `<li class="dir" onclick="navigateMedia('${escapeAttr(childPath)}')">
-                    <span>${d}</span>
-                </li>`
-            );
-        });
-        data.files.forEach(f => {
-            const fullPath = data.path ? data.path + '/' + f : f;
-            items.push(
-                `<li class="file">
-                    <span>${f}</span>
-                    <button onclick="addMediaToQueue('${escapeAttr(fullPath)}')">+</button>
-                </li>`
-            );
-        });
-
-        if (items.length === 0) {
-            list.innerHTML = '<li class="empty-media">Cartella vuota</li>';
-        } else {
-            list.innerHTML = items.join('');
-        }
-    } catch (e) {
-        console.error('Media refresh failed:', e);
-    }
-}
-
-function navigateMedia(path) {
-    currentMediaPath = path || '';
-    refreshMedia();
-}
-
-async function addMediaToQueue(filepath) {
-    await api('/queue/add-media?path=' + encodeURIComponent(filepath), 'POST');
-}
-
-async function uploadFile() {
-    const input = document.getElementById('fileUpload');
-    if (!input.files.length) return;
-    const formData = new FormData();
-    formData.append('file', input.files[0]);
-    await fetch('/media/upload?path=' + encodeURIComponent(currentMediaPath), {
-        method: 'POST',
-        body: formData
-    });
-    input.value = '';
-    refreshMedia();
-}
-
-async function addTrack() {
-    const input = document.getElementById('trackInput');
-    const url = input.value.trim();
-    if (!url) return;
-    await api('/queue/add', 'POST', { path: url, type: 'youtube' });
-    input.value = '';
-}
-
-async function searchYoutube() {
-    const input = document.getElementById('youtubeSearchInput');
-    const query = input.value.trim();
-    if (!query) return;
-    const list = document.getElementById('youtubeSearchResults');
-    list.innerHTML = '<li class="empty-media">Ricerca in corso...</li>';
-    try {
-        const data = await api('/youtube/search?q=' + encodeURIComponent(query));
-        if (data.results.length === 0) {
-            list.innerHTML = '<li class="empty-media">Nessun risultato</li>';
-        } else {
-            list.innerHTML = data.results.map(r =>
-                `<li>
-                    <span><strong>${r.title}</strong>${r.artist ? ' — ' + r.artist : ''}<br><small style="color:#888">${fmtDuration(r.duration_ms)}</small></span>
-                    <button onclick="addYoutubeTrack('${r.url.replace(/'/g, "\\'")}')">+</button>
-                </li>`
-            ).join('');
-        }
-    } catch (e) {
-        list.innerHTML = '<li class="empty-media">Errore nella ricerca</li>';
-    }
-}
-
-async function addYoutubeTrack(url) {
-    await api('/queue/add', 'POST', { path: url, type: 'youtube' });
-}
-
-async function searchSpotify() {
-    const input = document.getElementById('spotifySearchInput');
-    const query = input.value.trim();
-    if (!query) return;
-    const list = document.getElementById('spotifyResults');
-    list.innerHTML = '<li class="empty-media">Ricerca in corso...</li>';
-    try {
-        const data = await api('/spotify/search?q=' + encodeURIComponent(query));
-        if (data.results.length === 0) {
-            list.innerHTML = '<li class="empty-media">Nessun risultato</li>';
-        } else {
-            list.innerHTML = data.results.map(r =>
-                `<li>
-                    <span><strong>${r.title}</strong> — ${r.artist}<br><small style="color:#888">${r.album} · ${Math.floor(r.duration_ms/60000)}:${String(Math.floor((r.duration_ms%60000)/1000)).padStart(2,'0')}</small></span>
-                    <button onclick="addSpotifyTrack('${r.spotify_id}')">+</button>
-                </li>`
-            ).join('');
-        }
-    } catch (e) {
-        list.innerHTML = '<li class="empty-media">Errore nella ricerca</li>';
-    }
-}
-
-async function addSpotifyTrack(spotifyId) {
-    await api('/queue/add', 'POST', { path: spotifyId, type: 'spotify' });
-}
-
-function fmtDuration(ms) {
-    if (!ms) return '';
-    return Math.floor(ms/60000) + ':' + String(Math.floor((ms%60000)/1000)).padStart(2,'0');
-}
-
-function switchSearchTab(tab) {
-    document.querySelectorAll('.search-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-    document.querySelectorAll('.search-tab-panel').forEach(p => p.classList.toggle('active', p.dataset.tab === tab));
-}
-
-async function unifiedSearch() {
-    const input = document.getElementById('unifiedSearchInput');
-    const query = input.value.trim();
-    if (!query) return;
-    const container = document.getElementById('unifiedResults');
-    container.innerHTML = '<div class="search-loading">Ricerca in corso...</div>';
-    try {
-        const data = await api('/search?q=' + encodeURIComponent(query));
-
-        const sources = [
-            { key: 'local', label: 'File', items: data.local || [], render: f =>
-                `<li><span>${f.title}</span><button onclick="addMediaToQueue('${f.filename.replace(/'/g, "\\'")}')">+</button></li>`
+        // ---- ui ----
+        activeTab: 'player',
+        settingsOpen: false,
+        theme: document.documentElement.getAttribute('data-theme') || 'dark',
+        viewport: window.innerWidth,
+        toasts: {
+            items: [],
+            _seq: 0,
+            push(type, msg) {
+                const id = ++this._seq;
+                this.items.push({ id, type, msg });
+                setTimeout(() => this.dismiss(id), 4000);
             },
-            { key: 'youtube', label: 'YouTube', items: data.youtube || [], render: r =>
-                `<li><span><strong>${r.title}</strong>${r.artist ? ' — ' + r.artist : ''}<br><small style="color:#888">${fmtDuration(r.duration_ms)}</small></span><button onclick="api('/queue/add','POST',{path:'${r.url.replace(/'/g, "\\'")}',type:'youtube'})">+</button></li>`
+            dismiss(id) {
+                const i = this.items.findIndex(t => t.id === id);
+                if (i >= 0) this.items.splice(i, 1);
             },
-            { key: 'spotify', label: 'Spotify', items: data.spotify || [], render: r =>
-                `<li><span><strong>${r.title}</strong> — ${r.artist}<br><small style="color:#888">${r.album || ''} · ${fmtDuration(r.duration_ms)}</small></span><button onclick="addSpotifyTrack('${r.spotify_id}')">+</button></li>`
-            },
-            { key: 'soundcloud', label: 'SoundCloud', items: data.soundcloud || [], render: r =>
-                `<li><span><strong>${r.title}</strong>${r.artist ? ' — ' + r.artist : ''}<br><small style="color:#888">${fmtDuration(r.duration_ms)}</small></span><button onclick="addSoundCloudTrack('${r.url.replace(/'/g, "\\'")}')">+</button></li>`
-            },
-        ];
+        },
 
-        const withResults = sources.filter(s => s.items.length > 0);
-        if (withResults.length === 0) {
-            container.innerHTML = '<div class="search-empty">Nessun risultato trovato</div>';
-            return;
-        }
+        // ---- add card ----
+        addMode: 'search',  // 'search' | 'browse' | 'url'
+        addUrlInput: '',
+        trackType: 'local', // legacy: utilizzato in alcune asserzioni Spotify
+        playlistName: '',
 
-        let tabsHtml = '<div class="search-tabs">';
-        tabsHtml += withResults.map((s, i) =>
-            `<button data-tab="${s.key}" class="${i === 0 ? 'active' : ''}" onclick="switchSearchTab('${s.key}')">${s.label} (${s.items.length})</button>`
-        ).join('');
-        tabsHtml += '</div>';
+        // ---- volume / mute ----
+        muted: false,
+        _volumeBeforeMute: 80,
 
-        let panelsHtml = withResults.map((s, i) =>
-            `<div class="search-tab-panel ${i === 0 ? 'active' : ''}" data-tab="${s.key}"><ul class="media-list">${s.items.map(s.render).join('')}</ul></div>`
-        ).join('');
+        // ---- search ----
+        search: {
+            unifiedQuery: '', unifiedLoading: false, unifiedSearched: false,
+            unifiedTabs: [], unifiedActiveTab: '',
+            unifiedPageSize: 10, unifiedLoadingMore: false,
+            // Per-source state: items[], hasMore, fetched count
+            // Held inside unifiedTabs[*] (count, exhausted)
+            ytQuery: '', ytLoading: false, ytSearched: false, ytResults: [],
+            spQuery: '', spLoading: false, spSearched: false, spResults: [],
+            scQuery: '', scLoading: false, scSearched: false, scResults: [],
+        },
 
-        container.innerHTML = tabsHtml + panelsHtml;
-    } catch (e) {
-        container.innerHTML = '<div class="search-empty">Errore nella ricerca</div>';
-    }
-}
+        // ---- media ----
+        media: {
+            path: '', parent: null,
+            dirs: [], files: [], items: [],
+        },
 
-async function searchSoundCloud() {
-    const input = document.getElementById('soundcloudSearchInput');
-    const query = input.value.trim();
-    if (!query) return;
-    const list = document.getElementById('soundcloudResults');
-    list.innerHTML = '<li class="empty-media">Ricerca in corso...</li>';
-    try {
-        const data = await api('/soundcloud/search?q=' + encodeURIComponent(query));
-        if (data.results.length === 0) {
-            list.innerHTML = '<li class="empty-media">Nessun risultato</li>';
-        } else {
-            list.innerHTML = data.results.map(r =>
-                `<li>
-                    <span><strong>${r.title}</strong>${r.artist ? ' — ' + r.artist : ''}<br><small style="color:#888">${Math.floor(r.duration_ms/60000)}:${String(Math.floor((r.duration_ms%60000)/1000)).padStart(2,'0')}</small></span>
-                    <button onclick="addSoundCloudTrack('${r.url.replace(/'/g, "\\'")}')">+</button>
-                </li>`
-            ).join('');
-        }
-    } catch (e) {
-        list.innerHTML = '<li class="empty-media">Errore nella ricerca</li>';
-    }
-}
+        // ---- history ----
+        history: {
+            items: [], offset: 0, limit: 15, total: 0,
+            currentPage: 1, totalPages: 1,
+        },
 
-async function addSoundCloudTrack(url) {
-    await api('/queue/add', 'POST', { path: url, type: 'soundcloud' });
-}
+        // ---- playlists ----
+        playlists: [],
 
-async function removeTrack(id) {
-    await api('/queue/' + id, 'DELETE');
-}
+        // ---- drag-drop state ----
+        _draggedId: null,
 
-async function moveTrack(id, position) {
-    await api('/queue/' + id + '/move?position=' + position, 'POST');
-}
+        // ===== Computed-ish getters =====
+        get isDesktop() { return this.viewport >= 1024; },
+        get isTablet()  { return this.viewport >= 640 && this.viewport < 1024; },
+        get isMobile()  { return this.viewport < 640; },
 
-let draggedTrackId = null;
+        get spotifyStatusLabel() {
+            if (!this.spotify.authed) return 'Non autenticato';
+            if (this.spotify.warming) return 'In avvio…';
+            if (this.spotify.failed)  return 'Errore connessione';
+            if (this.spotify.ready)   return 'Pronto';
+            return 'In attesa';
+        },
 
-function togglePlayPause() {
-    api(isPlaying ? '/player/pause' : '/player/play', 'POST');
-}
+        get mediaCrumbs() {
+            if (!this.media.path) return [];
+            const parts = this.media.path.split('/').filter(Boolean);
+            const acc = [];
+            let p = '';
+            for (const part of parts) {
+                p = p ? p + '/' + part : part;
+                acc.push({ name: part, path: p });
+            }
+            return acc;
+        },
 
-function toggleShuffle() {
-    api('/player/shuffle?enabled=' + (!currentShuffle), 'POST');
-}
+        get currentSearchItems() {
+            const tab = this.search.unifiedTabs.find(t => t.key === this.search.unifiedActiveTab);
+            return tab ? tab.items : [];
+        },
 
-function cycleRepeat() {
-    const modes = ['off', 'one', 'all'];
-    const next = modes[(modes.indexOf(currentRepeat) + 1) % modes.length];
-    api('/player/repeat?mode=' + next, 'POST');
-}
+        // "Load more" visible if the active tab still has more results to fetch.
+        // Calculated per-tab based on the last page returning a full set.
+        get unifiedHasMore() {
+            const tab = this.search.unifiedTabs.find(t => t.key === this.search.unifiedActiveTab);
+            return tab ? tab.hasMore : false;
+        },
 
-function toggleNormalize() {
-    api('/player/normalize?enabled=' + (!currentNormalize), 'POST');
-}
+        // ETA in queue: tempo rimanente della corrente + somma durate delle precedenti
+        etaForIndex(i) {
+            let secs = Math.max(0, (this.player.duration || 0) - (this.player.position || 0));
+            for (let j = 0; j < i; j++) {
+                secs += this.queue[j]?.duration || 0;
+            }
+            const m = Math.floor(secs / 60);
+            const s = Math.floor(secs % 60);
+            return m + ':' + String(s).padStart(2, '0');
+        },
 
-function formatTime(seconds) {
-    const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return m + ':' + s.toString().padStart(2, '0');
-}
+        // ===== Init =====
+        init() {
+            this.connectWebSocket();
+            this.refreshMedia();
+            this.refreshPlaylists();
+            this.refreshSpotifyAuth();
+            this.refreshHistory();
 
-function renderQueue(queue) {
-    const list = document.getElementById('queueList');
-    if (queue.length === 0) {
-        list.innerHTML = '<li class="empty-queue">La scaletta è vuota</li>';
-        return;
-    }
-    const len = queue.length;
-    list.innerHTML = queue.map((t, i) => {
-        const artistPart = t.artist ? `<span class="track-artist">${t.artist}</span>` : '';
-        return `<li draggable="true" data-track-id="${t.id}" data-index="${i}">
-            <span class="drag-handle">&#10303;</span>
-            <span class="track-type">${t.type === 'youtube' ? 'YT' : t.type === 'spotify' ? 'SP' : t.type === 'soundcloud' ? 'SC' : 'FILE'}</span>
-            <span class="track-name">${t.title}${artistPart ? '<br>' + artistPart : ''}</span>
-            ${i > 0 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i - 1})">&#8593;</button>` : ''}
-            ${i < len - 1 ? `<button class="move-btn" onclick="moveTrack(${t.id}, ${i + 1})">&#8595;</button>` : ''}
-            <button onclick="removeTrack(${t.id})">&#10005;</button>
-        </li>`;
-    }).join('');
+            // Position polling fallback (WS doesn't push every second)
+            setInterval(async () => {
+                try {
+                    const state = await this.api('/player/state');
+                    this.player.position = state.position;
+                    this.player.duration = state.duration;
+                    this.player.isPlaying = state.is_playing;
+                } catch (e) {}
+            }, 1000);
 
-    // Attach drag & drop events
-    list.querySelectorAll('li[draggable]').forEach(li => {
-        li.addEventListener('dragstart', (e) => {
-            draggedTrackId = li.dataset.trackId;
-            li.classList.add('dragging');
+            // Slow poll Spotify auth status (background sanity)
+            this.spotify._slowPoll = setInterval(() => this.refreshSpotifyAuth(), 30000);
+
+            // Viewport tracking
+            window.addEventListener('resize', () => { this.viewport = window.innerWidth; });
+
+            // Theme listener
+            try {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                    if (!localStorage.getItem('theme')) {
+                        this.setTheme(e.matches ? 'dark' : 'light');
+                    }
+                });
+            } catch (e) {}
+        },
+
+        // ===== WebSocket =====
+        connectWebSocket() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            this.ws._socket = new WebSocket(`${protocol}//${location.host}/ws`);
+            this.ws._socket.onopen = () => {
+                this.ws.connected = true;
+                if (this.ws._reconnect) { clearInterval(this.ws._reconnect); this.ws._reconnect = null; }
+            };
+            this.ws._socket.onmessage = (event) => {
+                try { this.applyState(JSON.parse(event.data)); } catch (e) {}
+            };
+            this.ws._socket.onclose = () => {
+                this.ws.connected = false;
+                if (!this.ws._reconnect) {
+                    this.ws._reconnect = setInterval(() => {
+                        if (!this.ws._socket || this.ws._socket.readyState === WebSocket.CLOSED) {
+                            this.connectWebSocket();
+                        }
+                    }, 3000);
+                }
+            };
+            this.ws._socket.onerror = () => this.ws._socket?.close();
+        },
+
+        applyState(state) {
+            this.player.isPlaying = state.is_playing;
+            this.player.track = state.current_track || null;
+            this.player.position = state.position;
+            this.player.duration = state.duration;
+            this.player.volume = state.volume;
+            this.player.shuffle = state.shuffle;
+            this.player.repeat = state.repeat;
+            this.player.normalize = state.normalize !== false;
+            this.queue = state.queue || [];
+            // History changes piggybacked on state pushes
+            this.refreshHistory();
+        },
+
+        // ===== API helper =====
+        async api(url, method = 'GET', body = null) {
+            const opts = { method };
+            if (body) {
+                opts.headers = { 'Content-Type': 'application/json' };
+                opts.body = JSON.stringify(body);
+            }
+            const res = await fetch(url, opts);
+            if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+            return res.json();
+        },
+
+        post(url) {
+            this.api(url, 'POST').catch((e) => this.toasts.push('error', `Errore: ${e.message}`));
+        },
+
+        // ===== Player controls =====
+        togglePlayPause() {
+            this.post(this.player.isPlaying ? '/player/pause' : '/player/play');
+        },
+        toggleShuffle() {
+            this.post('/player/shuffle?enabled=' + (!this.player.shuffle));
+        },
+        cycleRepeat() {
+            const modes = ['off', 'one', 'all'];
+            const next = modes[(modes.indexOf(this.player.repeat) + 1) % modes.length];
+            this.post('/player/repeat?mode=' + next);
+        },
+        toggleNormalize() {
+            this.post('/player/normalize?enabled=' + (!this.player.normalize));
+        },
+        setVolume(v) {
+            this.player.volume = parseInt(v);
+            if (this.muted && parseInt(v) > 0) this.muted = false;
+            this.api('/player/volume?volume=' + v, 'POST').catch(() => {});
+        },
+        toggleMute() {
+            if (this.muted) {
+                const restore = this._volumeBeforeMute || 80;
+                this.muted = false;
+                this.setVolume(restore);
+            } else {
+                this._volumeBeforeMute = this.player.volume;
+                this.muted = true;
+                this.setVolume(0);
+            }
+        },
+        seekFromEvent(e) {
+            // Used as click fallback if no drag occurred
+            if (this._didScrub) { this._didScrub = false; return; }
+            const bar = e.currentTarget;
+            const rect = bar.getBoundingClientRect();
+            const pct = (e.clientX - rect.left) / rect.width;
+            this._seekTo(pct);
+        },
+        startScrub(e) {
+            if (this.player.duration <= 0) return;
+            const bar = e.currentTarget;
+            const rect = bar.getBoundingClientRect();
+            const update = (clientX) => {
+                let pct = (clientX - rect.left) / rect.width;
+                pct = Math.min(1, Math.max(0, pct));
+                this.player.position = pct * this.player.duration;
+            };
+            update(e.clientX);
+            const onMove = (ev) => update(ev.clientX);
+            const onUp = (ev) => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                this._didScrub = true;
+                let pct = (ev.clientX - rect.left) / rect.width;
+                pct = Math.min(1, Math.max(0, pct));
+                this._seekTo(pct);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            e.preventDefault();
+        },
+        _seekTo(pct) {
+            if (this.player.duration > 0) {
+                this.api('/player/seek?position=' + (pct * this.player.duration), 'POST').catch(() => {});
+            }
+        },
+
+        // ===== Add track =====
+        setType(type) { this.trackType = type; if (type === 'local') this.refreshMedia(); },
+
+        async addUrlTrack(url, type) {
+            try {
+                await this.api('/queue/add', 'POST', { path: url, type });
+                this.toasts.push('success', 'Aggiunto in coda');
+            } catch (e) {
+                this.toasts.push('error', `Errore: ${e.message}`);
+            }
+        },
+
+        async addDirectUrl() {
+            const url = this.addUrlInput.trim();
+            if (!url) return;
+            const type = /soundcloud\.com/i.test(url) ? 'soundcloud' : 'youtube';
+            await this.addUrlTrack(url, type);
+            this.addUrlInput = '';
+        },
+
+        async addSpotifyTrack(spotifyId, title) {
+            try {
+                await this.api('/queue/add', 'POST', { path: spotifyId, type: 'spotify' });
+                this.toasts.push('success', `Aggiunto: ${title}`);
+            } catch (e) {
+                this.toasts.push('error', `Errore: ${e.message}`);
+            }
+        },
+
+        async addMediaToQueue(filepath) {
+            try {
+                await this.api('/queue/add-media?path=' + encodeURIComponent(filepath), 'POST');
+                this.toasts.push('success', 'Aggiunto in coda');
+            } catch (e) {
+                this.toasts.push('error', `Errore: ${e.message}`);
+            }
+        },
+
+        addUnifiedItem(item, source) {
+            if (source === 'local')      this.addMediaToQueue(item.filename);
+            else if (source === 'spotify') this.addSpotifyTrack(item.spotify_id, item.title);
+            else                          this.addUrlTrack(item.url, source);
+        },
+
+        // ===== Search =====
+        async unifiedSearch() {
+            const q = this.search.unifiedQuery.trim();
+            if (!q) return;
+            this.search.unifiedLoading = true;
+            this.search.unifiedSearched = true;
+            this.search.unifiedTabs = [];
+            const limit = this.search.unifiedPageSize;
+            try {
+                const data = await this.api(`/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=0`);
+                this.search.unifiedTabs = this._buildTabsFromPage(data, limit, /* keyOffset */ 0);
+                this.search.unifiedActiveTab = this.search.unifiedTabs[0]?.key || '';
+            } catch (e) {
+                this.toasts.push('error', 'Errore nella ricerca');
+            } finally {
+                this.search.unifiedLoading = false;
+            }
+        },
+
+        // Builds (or extends) tab data structures from a page of results.
+        // If `onlySource` is set, only that source is updated; the other tabs
+        // are passed through unchanged (preserves existing items + hasMore).
+        _buildTabsFromPage(data, limit, keyOffset, existingTabs = null, onlySource = null) {
+            const sourceConfig = [
+                { key: 'local',     label: 'File',       prefix: 'l', extract: d => d.local || [] },
+                { key: 'youtube',   label: 'YouTube',    prefix: 'y', extract: d => d.youtube || [] },
+                { key: 'spotify',   label: 'Spotify',    prefix: 's', extract: d => d.spotify || [] },
+                { key: 'soundcloud',label: 'SoundCloud', prefix: 'c', extract: d => d.soundcloud || [] },
+            ];
+            const out = [];
+            for (const s of sourceConfig) {
+                const existing = existingTabs?.find(t => t.key === s.key);
+                if (onlySource && s.key !== onlySource) {
+                    if (existing) out.push(existing);
+                    continue;
+                }
+                const newItems = s.extract(data).map((r, i) => ({
+                    ...r,
+                    _key: s.prefix + (keyOffset + i),
+                    title: r.title || r.name,
+                }));
+                const allItems = existing ? [...existing.items, ...newItems] : newItems;
+                if (allItems.length === 0 && !existing) continue;
+                out.push({
+                    key: s.key,
+                    label: s.label,
+                    prefix: s.prefix,
+                    items: allItems,
+                    // hasMore: questa pagina ha riempito il limite → probabilmente
+                    // ce n'è ancora upstream. Cap interno backend a 200.
+                    hasMore: newItems.length >= limit && allItems.length < 200,
+                });
+            }
+            return out;
+        },
+
+        async loadMoreUnified() {
+            const tab = this.search.unifiedTabs.find(t => t.key === this.search.unifiedActiveTab);
+            if (!tab || !tab.hasMore || this.search.unifiedLoadingMore) return;
+
+            this.search.unifiedLoadingMore = true;
+            const q = this.search.unifiedQuery.trim();
+            const limit = this.search.unifiedPageSize;
+            const offset = tab.items.length;
+            const sourceKey = tab.key;
+            try {
+                const data = await this.api(
+                    `/search?q=${encodeURIComponent(q)}&limit=${limit}&offset=${offset}&sources=${sourceKey}`
+                );
+                this.search.unifiedTabs = this._buildTabsFromPage(
+                    data, limit, offset, this.search.unifiedTabs, sourceKey
+                );
+            } catch (e) {
+                this.toasts.push('error', 'Errore nel caricamento');
+            } finally {
+                this.search.unifiedLoadingMore = false;
+            }
+        },
+
+        async searchYoutube() {
+            const q = this.search.ytQuery.trim();
+            if (!q) return;
+            this.search.ytLoading = true;
+            this.search.ytSearched = true;
+            try {
+                const data = await this.api('/youtube/search?q=' + encodeURIComponent(q));
+                this.search.ytResults = data.results || [];
+            } catch (e) {
+                this.search.ytResults = [];
+                this.toasts.push('error', 'Errore nella ricerca YouTube');
+            } finally {
+                this.search.ytLoading = false;
+            }
+        },
+
+        async searchSpotify() {
+            const q = this.search.spQuery.trim();
+            if (!q) return;
+            this.search.spLoading = true;
+            this.search.spSearched = true;
+            try {
+                const data = await this.api('/spotify/search?q=' + encodeURIComponent(q));
+                this.search.spResults = data.results || [];
+            } catch (e) {
+                this.search.spResults = [];
+                this.toasts.push('error', 'Errore nella ricerca Spotify');
+            } finally {
+                this.search.spLoading = false;
+            }
+        },
+
+        async searchSoundCloud() {
+            const q = this.search.scQuery.trim();
+            if (!q) return;
+            this.search.scLoading = true;
+            this.search.scSearched = true;
+            try {
+                const data = await this.api('/soundcloud/search?q=' + encodeURIComponent(q));
+                this.search.scResults = data.results || [];
+            } catch (e) {
+                this.search.scResults = [];
+                this.toasts.push('error', 'Errore nella ricerca SoundCloud');
+            } finally {
+                this.search.scLoading = false;
+            }
+        },
+
+        // ===== Media browser =====
+        async refreshMedia() {
+            try {
+                const data = await this.api('/media/list?path=' + encodeURIComponent(this.media.path));
+                this.media.path = data.path;
+                this.media.parent = data.parent;
+                this.media.dirs = (data.dirs || []).map(d => ({
+                    name: d,
+                    path: data.path ? data.path + '/' + d : d,
+                }));
+                this.media.files = (data.files || []).map(f => ({
+                    name: f,
+                    path: data.path ? data.path + '/' + f : f,
+                }));
+                this.media.items = [...this.media.dirs, ...this.media.files];
+            } catch (e) {
+                console.error('Media refresh failed', e);
+            }
+        },
+
+        navigateMedia(path) {
+            this.media.path = path || '';
+            this.refreshMedia();
+        },
+
+        async uploadFile() {
+            const input = document.getElementById('fileUpload');
+            if (!input || !input.files.length) return;
+            const formData = new FormData();
+            formData.append('file', input.files[0]);
+            try {
+                await fetch('/media/upload?path=' + encodeURIComponent(this.media.path), {
+                    method: 'POST',
+                    body: formData,
+                });
+                this.toasts.push('success', 'File caricato');
+                input.value = '';
+                this.refreshMedia();
+            } catch (e) {
+                this.toasts.push('error', 'Upload fallito');
+            }
+        },
+
+        // ===== Queue actions =====
+        async removeTrack(id) {
+            try { await this.api('/queue/' + id, 'DELETE'); }
+            catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async moveTrack(id, position) {
+            try { await this.api('/queue/' + id + '/move?position=' + position, 'POST'); }
+            catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+
+        // Drag & drop
+        onDragStart(e, id) {
+            this._draggedId = String(id);
+            e.currentTarget.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', li.dataset.trackId);
-        });
-        li.addEventListener('dragend', () => {
-            li.classList.remove('dragging');
-            list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
-            draggedTrackId = null;
-        });
-        li.addEventListener('dragover', (e) => {
-            e.preventDefault();
+            e.dataTransfer.setData('text/plain', String(id));
+        },
+        onDragEnd(e) {
+            e.currentTarget.classList.remove('dragging');
+            document.querySelectorAll('#queueList .drag-over').forEach(el => el.classList.remove('drag-over'));
+            this._draggedId = null;
+        },
+        onDragOver(e) {
             e.dataTransfer.dropEffect = 'move';
-            if (li.dataset.trackId !== draggedTrackId) {
-                li.classList.add('drag-over');
-            }
-        });
-        li.addEventListener('dragleave', () => {
+            const li = e.currentTarget;
+            if (li.dataset.trackId !== this._draggedId) li.classList.add('drag-over');
+        },
+        onDrop(e, targetIndex) {
+            const li = e.currentTarget;
             li.classList.remove('drag-over');
-        });
-        li.addEventListener('drop', (e) => {
-            e.preventDefault();
-            li.classList.remove('drag-over');
-            const targetIndex = parseInt(li.dataset.index);
-            const srcId = e.dataTransfer.getData('text/plain');
+            const srcId = e.dataTransfer.getData('text/plain') || this._draggedId;
             if (srcId && li.dataset.trackId !== srcId) {
-                moveTrack(srcId, targetIndex);
+                this.moveTrack(srcId, targetIndex);
             }
-        });
-    });
-}
+        },
 
-let historyOffset = 0;
-const historyLimit = 15;
-
-async function refreshHistory() {
-    try {
-        const data = await api('/history?offset=' + historyOffset + '&limit=' + historyLimit);
-        const list = document.getElementById('historyList');
-        const pag = document.getElementById('historyPagination');
-        const clearBtn = document.getElementById('clearHistoryBtn');
-
-        // Clamp offset if entries were removed and we now overshoot
-        if (historyOffset >= data.total && data.total > 0) {
-            historyOffset = Math.max(0, Math.floor((data.total - 1) / historyLimit) * historyLimit);
-            return refreshHistory();
-        }
-
-        if (data.total === 0) {
-            list.innerHTML = '<li class="empty-history">Nessuna traccia nella cronologia</li>';
-            pag.style.display = 'none';
-            clearBtn.style.display = 'none';
-            return;
-        }
-
-        list.innerHTML = data.items.map((e, i) => {
-            const globalIdx = data.offset + i;
-            return `<li>
-                <span class="track-type">${e.track.type === 'youtube' ? 'YT' : e.track.type === 'spotify' ? 'SP' : e.track.type === 'soundcloud' ? 'SC' : 'FILE'}</span>
-                <span class="track-name">${e.track.title}</span>
-                <span class="track-time">${new Date(e.played_at).toLocaleTimeString()}</span>
-                <button onclick="requeueFromHistory(${globalIdx})">+ Coda</button>
-                <button onclick="removeHistoryEntry(${globalIdx})" style="background:none;color:#e94560;padding:4px;">&#10005;</button>
-            </li>`;
-        }).join('');
-
-        clearBtn.style.display = 'block';
-
-        const totalPages = Math.ceil(data.total / data.limit);
-        const currentPage = Math.floor(data.offset / data.limit) + 1;
-        if (totalPages > 1) {
-            pag.style.display = 'flex';
-            document.getElementById('histPageInfo').textContent =
-                `${currentPage} / ${totalPages} (${data.total} tracce)`;
-            document.getElementById('histPrev').disabled = data.offset === 0;
-            document.getElementById('histNext').disabled = data.offset + data.limit >= data.total;
-        } else {
-            pag.style.display = 'none';
-        }
-    } catch (e) {
-        console.error('History refresh failed:', e);
-    }
-}
-
-function historyPrev() {
-    historyOffset = Math.max(0, historyOffset - historyLimit);
-    refreshHistory();
-}
-
-function historyNext() {
-    historyOffset += historyLimit;
-    refreshHistory();
-}
-
-async function requeueFromHistory(index) {
-    await api('/history/' + index + '/requeue', 'POST');
-}
-
-async function removeHistoryEntry(index) {
-    await api('/history/' + index, 'DELETE');
-    refreshHistory();
-}
-
-async function clearHistory() {
-    if (!confirm('Cancellare tutta la cronologia?')) return;
-    await api('/history', 'DELETE');
-    refreshHistory();
-}
-
-// --- Playlists ---
-async function refreshPlaylists() {
-    try {
-        const data = await api('/playlists');
-        const list = document.getElementById('playlistList');
-        if (data.playlists.length === 0) {
-            list.innerHTML = '<li class="empty-playlist">Nessuna playlist salvata</li>';
-        } else {
-            list.innerHTML = data.playlists.map(p =>
-                `<li>
-                    <div class="pl-info">
-                        <div class="pl-name">${p.name}</div>
-                        <div class="pl-count">${p.track_count} brani</div>
-                    </div>
-                    <div class="pl-actions">
-                        <button onclick="loadPlaylist('${p.name.replace(/'/g, "\\'")}', false)" title="Accoda">+ Coda</button>
-                        <button onclick="loadPlaylist('${p.name.replace(/'/g, "\\'")}', true)" title="Sostituisci">&#9654;</button>
-                        <button class="del-btn" onclick="deletePlaylist('${p.name.replace(/'/g, "\\'")}')">&#10005;</button>
-                    </div>
-                </li>`
-            ).join('');
-        }
-    } catch (e) {
-        console.error('Playlist refresh failed:', e);
-    }
-}
-
-async function savePlaylist() {
-    const input = document.getElementById('playlistNameInput');
-    const name = input.value.trim();
-    if (!name) return;
-    await api('/playlists/save?name=' + encodeURIComponent(name), 'POST');
-    input.value = '';
-    refreshPlaylists();
-}
-
-async function loadPlaylist(name, replace) {
-    await api('/playlists/' + encodeURIComponent(name) + '/load?replace=' + replace, 'POST');
-}
-
-async function deletePlaylist(name) {
-    if (!confirm(`Eliminare la playlist "${name}"?`)) return;
-    await api('/playlists/' + encodeURIComponent(name), 'DELETE');
-    refreshPlaylists();
-}
-
-// Seek on progress bar click
-document.getElementById('progressBar').addEventListener('click', async (e) => {
-    const bar = e.currentTarget;
-    const pct = e.offsetX / bar.offsetWidth;
-    const state = await api('/player/state');
-    if (state.duration > 0) {
-        api('/player/seek?position=' + (pct * state.duration), 'POST');
-    }
-});
-
-// Allow Enter key to add track
-document.getElementById('trackInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') addTrack();
-});
-
-// Enter key for YouTube search
-document.getElementById('youtubeSearchInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') searchYoutube();
-});
-
-// Enter key for Spotify search
-document.getElementById('spotifySearchInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') searchSpotify();
-});
-
-// Enter key for SoundCloud search
-document.getElementById('soundcloudSearchInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') searchSoundCloud();
-});
-
-// Enter key for unified search
-document.getElementById('unifiedSearchInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') unifiedSearch();
-});
-
-// Enter key for playlist save
-document.getElementById('playlistNameInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') savePlaylist();
-});
-
-// --- Settings panel + Spotify auth status ---
-let spotifyAuthFastPoll = null;
-
-async function fetchSpotifyAuth() {
-    try { return await api('/spotify/auth-status'); }
-    catch (e) { return null; }
-}
-
-function applySpotifyStatus(data) {
-    if (!data) return;
-    const dot = document.getElementById('spotifyStatus');
-    const sDot = document.getElementById('settingsSpotifyDot');
-    const sLabel = document.getElementById('settingsSpotifyLabel');
-    const loginArea = document.getElementById('spotifyLoginArea');
-    const instructions = document.getElementById('spotifyInstructions');
-    const success = document.getElementById('spotifySuccess');
-
-    const authed = !!data.authenticated;
-    const status = data.session_status || (authed ? 'idle' : 'idle');
-    const warming = authed && status === 'warming';
-    const ready = authed && status === 'ready';
-    const failed = authed && status === 'failed';
-
-    // Three-state header dot: red (no auth/failed) / yellow pulse (warming) / green (ready)
-    dot.classList.toggle('authenticated', ready);
-    dot.classList.toggle('warming', warming);
-    dot.classList.toggle('unauthenticated', !authed || failed);
-    sDot.classList.toggle('authenticated', ready);
-    sDot.classList.toggle('warming', warming);
-    sDot.classList.toggle('unauthenticated', !authed || failed);
-
-    let labelText;
-    if (!authed) labelText = 'Non autenticato';
-    else if (warming) labelText = 'In avvio…';
-    else if (failed) labelText = 'Errore connessione';
-    else if (ready) labelText = 'Pronto';
-    else labelText = 'In attesa';
-    sLabel.textContent = labelText;
-    dot.title = labelText;
-
-    // Aggiungi Traccia → Spotify: mostra solo quando la sessione librespot è
-    // operativa (ready), altrimenti il flusso "cerca → aggiungi → riproduce"
-    // fallirebbe a metà o partirebbe con grossi delay.
-    document.getElementById('btnSpotify').style.display = ready ? '' : 'none';
-    if (!ready && trackType === 'spotify') setType('local');
-
-    if (authed) {
-        loginArea.style.display = 'none';
-        instructions.style.display = 'none';
-        // While the session is still warming, keep polling fast so the dot
-        // and the "Aggiungi Spotify" button flip the moment it's ready.
-        if (warming) {
-            if (!spotifyAuthFastPoll) {
-                spotifyAuthFastPoll = setInterval(refreshSpotifyAuth, 1500);
+        // ===== History =====
+        async refreshHistory() {
+            try {
+                const data = await this.api(`/history?offset=${this.history.offset}&limit=${this.history.limit}`);
+                if (this.history.offset >= data.total && data.total > 0) {
+                    this.history.offset = Math.max(0, Math.floor((data.total - 1) / this.history.limit) * this.history.limit);
+                    return this.refreshHistory();
+                }
+                this.history.items = data.items || [];
+                this.history.total = data.total || 0;
+                this.history.totalPages = Math.max(1, Math.ceil(data.total / data.limit));
+                this.history.currentPage = Math.floor(data.offset / data.limit) + 1;
+            } catch (e) {
+                console.error('History refresh failed', e);
             }
-        } else if (spotifyAuthFastPoll) {
-            success.style.display = '';
-            clearInterval(spotifyAuthFastPoll);
-            spotifyAuthFastPoll = null;
-        }
-    } else {
-        success.style.display = 'none';
-        const zcRunning = data.zeroconf && data.zeroconf.running;
-        if (zcRunning) {
-            loginArea.style.display = 'none';
-            instructions.style.display = '';
-            document.getElementById('spotifyDeviceName').textContent =
-                (data.zeroconf.device_name || 'DiscoBot');
-        } else {
-            loginArea.style.display = '';
-            instructions.style.display = 'none';
-            document.getElementById('spotifyLoginBtn').disabled = false;
-        }
-    }
+        },
+        historyPrev() { this.history.offset = Math.max(0, this.history.offset - this.history.limit); this.refreshHistory(); },
+        historyNext() { this.history.offset += this.history.limit; this.refreshHistory(); },
+        async requeueFromHistory(idx) {
+            try {
+                await this.api('/history/' + idx + '/requeue', 'POST');
+                this.toasts.push('success', 'Aggiunto in coda');
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async removeHistoryEntry(idx) {
+            try {
+                await this.api('/history/' + idx, 'DELETE');
+                this.refreshHistory();
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async clearHistory() {
+            if (!confirm('Cancellare tutta la cronologia?')) return;
+            try {
+                await this.api('/history', 'DELETE');
+                this.refreshHistory();
+                this.toasts.push('success', 'Cronologia svuotata');
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+
+        // ===== Playlists =====
+        async refreshPlaylists() {
+            try {
+                const data = await this.api('/playlists');
+                this.playlists = data.playlists || [];
+            } catch (e) { console.error('Playlists refresh failed', e); }
+        },
+        async savePlaylist() {
+            const name = this.playlistName.trim();
+            if (!name) return;
+            try {
+                await this.api('/playlists/save?name=' + encodeURIComponent(name), 'POST');
+                this.playlistName = '';
+                this.refreshPlaylists();
+                this.toasts.push('success', `Playlist "${name}" salvata`);
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async promptSavePlaylist() {
+            const name = window.prompt('Nome della playlist:');
+            if (!name || !name.trim()) return;
+            this.playlistName = name.trim();
+            await this.savePlaylist();
+        },
+        async loadPlaylist(name, replace) {
+            try {
+                await this.api('/playlists/' + encodeURIComponent(name) + '/load?replace=' + replace, 'POST');
+                this.toasts.push('success', replace ? `Playlist "${name}" caricata` : `Playlist "${name}" accodata`);
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+        async deletePlaylist(name) {
+            if (!confirm(`Eliminare la playlist "${name}"?`)) return;
+            try {
+                await this.api('/playlists/' + encodeURIComponent(name), 'DELETE');
+                this.refreshPlaylists();
+                this.toasts.push('success', `Playlist "${name}" eliminata`);
+            } catch (e) { this.toasts.push('error', `Errore: ${e.message}`); }
+        },
+
+        // ===== Spotify auth =====
+        async refreshSpotifyAuth() {
+            try {
+                const data = await this.api('/spotify/auth-status');
+                this.applySpotifyStatus(data);
+            } catch (e) {}
+        },
+
+        applySpotifyStatus(data) {
+            if (!data) return;
+            const authed = !!data.authenticated;
+            const status = data.session_status || 'idle';
+            this.spotify.authed = authed;
+            this.spotify.warming = authed && status === 'warming';
+            this.spotify.ready = authed && status === 'ready';
+            this.spotify.failed = authed && status === 'failed';
+            this.spotify.zeroconf = data.zeroconf || null;
+
+            if (this.trackType === 'spotify' && !this.spotify.ready) {
+                this.trackType = 'local';
+            }
+
+            // Fast-poll while warming or zeroconf is running
+            const needsFast = (authed && this.spotify.warming) ||
+                              (data.zeroconf && data.zeroconf.running && !authed);
+            if (needsFast && !this.spotify._fastPoll) {
+                this.spotify._fastPoll = setInterval(() => this.refreshSpotifyAuth(), 1500);
+            } else if (!needsFast && this.spotify._fastPoll) {
+                clearInterval(this.spotify._fastPoll);
+                this.spotify._fastPoll = null;
+                if (this.spotify.ready && this._wasZeroconfRunning) {
+                    this.toasts.push('success', 'Spotify Connect: login completato');
+                }
+            }
+            this._wasZeroconfRunning = data.zeroconf && data.zeroconf.running;
+        },
+
+        async startSpotifyZeroconf() {
+            this.spotify.startingZeroconf = true;
+            try {
+                await this.api('/spotify/zeroconf/start', 'POST');
+                await this.refreshSpotifyAuth();
+            } catch (e) {
+                this.toasts.push('error', `Login fallito: ${e.message}`);
+            } finally {
+                this.spotify.startingZeroconf = false;
+            }
+        },
+
+        async stopSpotifyZeroconf() {
+            try { await this.api('/spotify/zeroconf/stop', 'POST'); } catch (e) {}
+            await this.refreshSpotifyAuth();
+        },
+
+        // ===== Settings dialog =====
+        openSettings() {
+            const d = document.getElementById('settingsDialog');
+            if (d && !d.open) {
+                d.showModal();
+                this.settingsOpen = true;
+                this.refreshSpotifyAuth();
+            }
+        },
+        async closeSettings() {
+            const d = document.getElementById('settingsDialog');
+            if (d && d.open) d.close();
+            this.settingsOpen = false;
+            // Tear down stranded zeroconf bootstrap
+            try {
+                const data = await this.api('/spotify/auth-status');
+                if (data && data.zeroconf && data.zeroconf.running && !data.authenticated) {
+                    await this.api('/spotify/zeroconf/stop', 'POST');
+                    this.refreshSpotifyAuth();
+                }
+            } catch (e) {}
+        },
+
+        // ===== Theme =====
+        toggleTheme() { this.setTheme(this.theme === 'dark' ? 'light' : 'dark'); },
+        setTheme(t) {
+            this.theme = t;
+            document.documentElement.setAttribute('data-theme', t);
+            try { localStorage.setItem('theme', t); } catch (e) {}
+        },
+
+        // ===== Formatting helpers =====
+        formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return m + ':' + s.toString().padStart(2, '0');
+        },
+        fmtDuration(ms) {
+            if (!ms) return '';
+            return Math.floor(ms / 60000) + ':' + String(Math.floor((ms % 60000) / 1000)).padStart(2, '0');
+        },
+        formatPlayedAt(iso) {
+            try { return new Date(iso).toLocaleTimeString(); } catch (e) { return ''; }
+        },
+        formatRelativeTime(iso) {
+            try {
+                const then = new Date(iso).getTime();
+                const diff = Math.max(0, (Date.now() - then) / 1000);
+                if (diff < 60) return 'pochi secondi fa';
+                if (diff < 3600) return Math.floor(diff / 60) + ' min fa';
+                if (diff < 86400) return Math.floor(diff / 3600) + ' h fa';
+                const days = Math.floor(diff / 86400);
+                if (days < 7) return days + ' g fa';
+                return new Date(iso).toLocaleDateString();
+            } catch (e) { return ''; }
+        },
+        formatArtist(track) {
+            const parts = [];
+            if (track.artist) parts.push(track.artist);
+            if (track.album) parts.push(track.album);
+            return parts.join(' — ');
+        },
+        formatSearchSubtitle(item, source) {
+            if (source === 'local')   return '';
+            if (source === 'spotify') return [item.artist, item.album].filter(Boolean).join(' — ');
+            return item.artist || '';
+        },
+        sourceLabel(type) {
+            return type === 'youtube' ? 'YT'
+                 : type === 'spotify' ? 'SP'
+                 : type === 'soundcloud' ? 'SC'
+                 : 'FILE';
+        },
+        sourceClass(type) {
+            return type === 'youtube' ? 'yt'
+                 : type === 'spotify' ? 'sp'
+                 : type === 'soundcloud' ? 'sc'
+                 : 'file';
+        },
+    };
 }
-
-async function refreshSpotifyAuth() {
-    applySpotifyStatus(await fetchSpotifyAuth());
-}
-
-// --- Hash router: '' or '#/' → main, '#/settings' → settings page ---
-async function applyRoute() {
-    const settingsActive = (location.hash || '').startsWith('#/settings');
-    document.getElementById('mainView').hidden = settingsActive;
-    document.getElementById('settingsView').hidden = !settingsActive;
-    if (settingsActive) {
-        refreshSpotifyAuth();
-        return;
-    }
-    // Leaving settings: stop the fast poll and tear down any stranded Zeroconf
-    // bootstrap so DiscoBot doesn't linger as a Connect device on the LAN.
-    if (spotifyAuthFastPoll) {
-        clearInterval(spotifyAuthFastPoll);
-        spotifyAuthFastPoll = null;
-    }
-    const data = await fetchSpotifyAuth();
-    if (data && data.zeroconf && data.zeroconf.running && !data.authenticated) {
-        try { await api('/spotify/zeroconf/stop', 'POST'); } catch (e) {}
-    }
-}
-
-window.addEventListener('hashchange', applyRoute);
-
-async function startSpotifyZeroconf() {
-    const btn = document.getElementById('spotifyLoginBtn');
-    btn.disabled = true;
-    try {
-        await api('/spotify/zeroconf/start', 'POST');
-    } catch (e) {
-        btn.disabled = false;
-        return;
-    }
-    await refreshSpotifyAuth();
-    if (!spotifyAuthFastPoll) {
-        spotifyAuthFastPoll = setInterval(refreshSpotifyAuth, 2000);
-    }
-}
-
-async function stopSpotifyZeroconf() {
-    try { await api('/spotify/zeroconf/stop', 'POST'); } catch (e) {}
-    if (spotifyAuthFastPoll) {
-        clearInterval(spotifyAuthFastPoll);
-        spotifyAuthFastPoll = null;
-    }
-    refreshSpotifyAuth();
-}
-
-// Background poll keeps the persistent dot honest at low cost
-setInterval(refreshSpotifyAuth, 30000);
-refreshSpotifyAuth();
-
-// Init
-connectWebSocket();
-refreshMedia();
-refreshPlaylists();
-applyRoute();

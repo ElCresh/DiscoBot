@@ -42,7 +42,14 @@
       "Bash(ip -4 -o addr show)",
       "Bash(awk '{print $2, $4}')",
       "Bash(dpkg -l)",
-      "Bash(ldconfig -p)"
+      "Bash(ldconfig -p)",
+      "Bash(python3 *)",
+      "Bash(node --check /home/andrea/Desktop/DiscoBot/static/app.js)",
+      "Bash(.venv/bin/pip list *)",
+      "Bash(pkill -f \"uvicorn.run.*18000\")",
+      "Bash(pkill -f \"port=18000\")",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/playwright install *)"
     ]
   }
 }

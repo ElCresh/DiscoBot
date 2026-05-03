@@ -377,12 +377,32 @@ def youtube_search(q: str, limit: int = 10):
 # --- Unified search ---
 
 @app.get("/search")
-async def unified_search(q: str, limit: int = 5):
-    """Search all sources in parallel and return grouped results."""
+async def unified_search(q: str, limit: int = 10, offset: int = 0, sources: str | None = None):
+    """Search across sources in parallel and return grouped results.
+
+    Real pagination per source:
+    - Spotify: native offset via the Web API.
+    - Local: linear scan, slice by offset.
+    - YouTube/SoundCloud: yt-dlp doesn't expose offset; we fetch (offset+limit)
+      and discard the leading `offset`. Costlier than native offset but the only
+      option with the underlying scraper.
+
+    `sources` is an optional CSV (e.g. "spotify" or "youtube,soundcloud") to
+    restrict which providers are queried — used by "load more" so only the
+    active tab is re-fetched, sparing the unrelated network calls.
+    """
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query is required")
     query = q.strip()
-    cap = min(limit, 20)
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+    page = min(limit, 50)
+    fetch_total = min(offset + page, 200)
+    all_sources = {"local", "youtube", "spotify", "soundcloud"}
+    enabled = (
+        {s.strip() for s in sources.split(",") if s.strip() in all_sources}
+        if sources else all_sources
+    )
 
     async def _search_local():
         lowq = query.lower()
@@ -395,16 +415,17 @@ async def unified_search(q: str, limit: int = 5):
                     continue
                 rel = f.relative_to(MEDIA_DIR).as_posix()
                 matches.append({"filename": rel, "title": f.stem})
-                if len(matches) >= cap:
+                if len(matches) >= fetch_total:
                     break
-            return matches
+            return matches[offset:]
         except Exception:
             return []
 
     async def _search_youtube():
         from app.youtube import search_youtube
         try:
-            return await asyncio.to_thread(search_youtube, query, cap)
+            results = await asyncio.to_thread(search_youtube, query, fetch_total)
+            return results[offset:]
         except Exception:
             return []
 
@@ -413,27 +434,32 @@ async def unified_search(q: str, limit: int = 5):
             return []
         from app.spotify import search_tracks
         try:
-            return await asyncio.to_thread(search_tracks, query, cap)
+            return await asyncio.to_thread(search_tracks, query, page, offset)
         except Exception:
             return []
 
     async def _search_soundcloud():
         from app.soundcloud import search_soundcloud
         try:
-            return await asyncio.to_thread(search_soundcloud, query, cap)
+            results = await asyncio.to_thread(search_soundcloud, query, fetch_total)
+            return results[offset:]
         except Exception:
             return []
 
-    local, youtube, spotify, soundcloud = await asyncio.gather(
-        _search_local(), _search_youtube(), _search_spotify(), _search_soundcloud()
-    )
-
-    return {
-        "local": local,
-        "youtube": youtube,
-        "spotify": spotify,
-        "soundcloud": soundcloud,
+    runners = {
+        "local": _search_local,
+        "youtube": _search_youtube,
+        "spotify": _search_spotify,
+        "soundcloud": _search_soundcloud,
     }
+    keys = [k for k in runners if k in enabled]
+    results = await asyncio.gather(*(runners[k]() for k in keys))
+    out = {k: [] for k in all_sources}
+    for k, v in zip(keys, results):
+        out[k] = v
+    out["offset"] = offset
+    out["limit"] = page
+    return out
 
 
 # --- SoundCloud ---

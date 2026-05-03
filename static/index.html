@@ -1,193 +1,557 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="it" data-theme="dark">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0e0e10">
     <title>DiscoBot</title>
     <link rel="stylesheet" href="/static/app.css">
+    <link rel="preload" href="/static/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <script>
+        // Pre-paint theme apply (no FOUC)
+        (function() {
+            try {
+                var saved = localStorage.getItem('theme');
+                var t = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {}
+        })();
+    </script>
 </head>
-<body>
-    <h1>DiscoBot
-        <span class="ws-status" id="wsStatus" title="WebSocket"></span>
-        <span class="spotify-status" id="spotifyStatus" title="Spotify auth" onclick="location.hash='#/settings'"></span>
-        <a class="icon-btn" href="#/settings" title="Impostazioni">&#9881;</a>
-    </h1>
+<body x-data="discoBot()" x-init="init()" @keydown.window.escape="settingsOpen && closeSettings()">
 
-    <main id="mainView" class="view">
-    <div class="layout">
-        <!-- Colonna centrale: Now Playing + Aggiungi Traccia -->
-        <div class="col-center">
-            <div class="card now-playing">
-                <div class="title" id="trackTitle">Nessuna traccia</div>
-                <div class="artist-info" id="artistInfo"></div>
-                <div class="time">
-                    <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
-                </div>
-                <div class="progress-bar" id="progressBar">
-                    <div class="fill" id="progressFill"></div>
-                </div>
-                <div class="controls">
-                    <button class="mode-btn" id="shuffleBtn" onclick="toggleShuffle()" title="Shuffle"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>
-                    <button onclick="api('/player/previous', 'POST')">&#9198;</button>
-                    <button class="play-btn" onclick="api('/player/stop', 'POST')">&#9209;</button>
-                    <button class="play-btn" id="playPauseBtn" onclick="togglePlayPause()">&#9654;</button>
-                    <button onclick="api('/player/skip', 'POST')">&#9197;</button>
-                    <button class="mode-btn" id="repeatBtn" onclick="cycleRepeat()" title="Repeat"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
-                </div>
-                <div class="volume">
-                    <span>&#128264;</span>
-                    <input type="range" id="volumeSlider" min="0" max="100" value="80"
-                           oninput="api('/player/volume?volume=' + this.value, 'POST')">
-                    <span id="volumeLabel">80</span>
-                    <button class="mode-btn" id="normalizeBtn" onclick="toggleNormalize()" title="Auto-livellamento volume" style="margin-left:8px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="4" y2="14"/><line x1="9" y1="20" x2="9" y2="10"/><line x1="14" y1="20" x2="14" y2="4"/><line x1="19" y1="20" x2="19" y2="12"/></svg></button>
-                </div>
-            </div>
+<!-- ============================ HEADER ============================ -->
+<header class="app-header">
+    <div class="brand">DISCOBOT<span class="brand-version">/1.0</span></div>
 
-            <div class="card">
-                <h2>Cerca Ovunque</h2>
-                <div class="add-track">
-                    <input type="text" id="unifiedSearchInput" placeholder="Cerca brani su tutte le sorgenti...">
-                    <button onclick="unifiedSearch()">Cerca</button>
-                </div>
-                <div id="unifiedResults" style="margin-top:10px"></div>
-            </div>
-
-            <div class="card">
-                <h2>Aggiungi Traccia</h2>
-                <div class="type-toggle">
-                    <button id="btnLocal" class="active" onclick="setType('local')">File Locale</button>
-                    <button id="btnYoutube" onclick="setType('youtube')">YouTube</button>
-                    <button id="btnSpotify" onclick="setType('spotify')" style="display:none">Spotify</button>
-                    <button id="btnSoundcloud" onclick="setType('soundcloud')">SoundCloud</button>
-                </div>
-                <!-- Visibile solo quando type=youtube -->
-                <div id="youtubeInput" style="display:none">
-                    <div class="add-track">
-                        <input type="text" id="trackInput" placeholder="https://youtube.com/watch?v=...">
-                        <button onclick="addTrack()">+</button>
-                    </div>
-                    <div style="text-align:center;color:#555;font-size:0.8em;margin:8px 0;">oppure cerca</div>
-                    <div class="add-track">
-                        <input type="text" id="youtubeSearchInput" placeholder="Cerca su YouTube...">
-                        <button onclick="searchYoutube()">Cerca</button>
-                    </div>
-                    <ul class="media-list" id="youtubeSearchResults">
-                        <li class="empty-media">Cerca un brano su YouTube</li>
-                    </ul>
-                </div>
-                <!-- Visibile solo quando type=local -->
-                <div id="localInput">
-                    <div class="media-breadcrumb" id="mediaBreadcrumb"></div>
-                    <ul class="media-list" id="mediaList">
-                        <li class="empty-media">Nessun file nella libreria</li>
-                    </ul>
-                    <div class="upload-form">
-                        <input type="file" id="fileUpload" accept="audio/*,video/*">
-                        <button onclick="uploadFile()">Carica qui</button>
-                    </div>
-                </div>
-                <!-- Visibile solo quando type=spotify -->
-                <div id="spotifyInput" style="display:none">
-                    <div class="add-track">
-                        <input type="text" id="spotifySearchInput" placeholder="Cerca su Spotify...">
-                        <button onclick="searchSpotify()">Cerca</button>
-                    </div>
-                    <ul class="media-list" id="spotifyResults">
-                        <li class="empty-media">Cerca un brano su Spotify</li>
-                    </ul>
-                </div>
-                <!-- Visibile solo quando type=soundcloud -->
-                <div id="soundcloudInput" style="display:none">
-                    <div class="add-track">
-                        <input type="text" id="soundcloudSearchInput" placeholder="Cerca su SoundCloud...">
-                        <button onclick="searchSoundCloud()">Cerca</button>
-                    </div>
-                    <ul class="media-list" id="soundcloudResults">
-                        <li class="empty-media">Cerca un brano su SoundCloud</li>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- Playlist card -->
-            <div class="card">
-                <h2>Playlist</h2>
-                <div class="playlist-controls">
-                    <input type="text" id="playlistNameInput" placeholder="Nome playlist...">
-                    <button onclick="savePlaylist()">Salva</button>
-                </div>
-                <ul class="playlist-list" id="playlistList">
-                    <li class="empty-playlist">Nessuna playlist salvata</li>
-                </ul>
-            </div>
-        </div>
-
-        <!-- Colonna destra: Scaletta -->
-        <div class="col-right">
-            <div class="card">
-                <h2>Scaletta</h2>
-                <ul class="queue-list" id="queueList">
-                    <li class="empty-queue">La scaletta è vuota</li>
-                </ul>
-            </div>
-        </div>
-
-        <!-- Colonna sinistra: Cronologia -->
-        <div class="col-left">
-            <div class="card">
-                <h2>Cronologia</h2>
-                <ul class="history-list" id="historyList">
-                    <li class="empty-history">Nessuna traccia nella cronologia</li>
-                </ul>
-                <div class="history-pagination" id="historyPagination" style="display:none">
-                    <button id="histPrev" onclick="historyPrev()">&#9664; Prec.</button>
-                    <span class="page-info" id="histPageInfo">—</span>
-                    <button id="histNext" onclick="historyNext()">Succ. &#9654;</button>
-                </div>
-                <button id="clearHistoryBtn" style="display:none" onclick="clearHistory()">Cancella Cronologia</button>
-            </div>
-        </div>
+    <div class="status-row">
+        <span class="status-pill" :class="{connected: ws.connected}" title="WebSocket">
+            <span class="status-dot"></span>
+            <span x-text="ws.connected ? 'WS' : 'OFF'"></span>
+        </span>
+        <span class="status-pill"
+              data-clickable="true"
+              :class="{
+                authenticated: spotify.ready,
+                warming: spotify.warming,
+                unauthenticated: !spotify.authed || spotify.failed
+              }"
+              :title="spotifyStatusLabel"
+              @click="openSettings()">
+            <span class="status-dot"></span>
+            <span>SPOT</span>
+        </span>
     </div>
-    </main>
 
-    <main id="settingsView" class="view" hidden>
-        <div class="settings-page">
-            <div class="settings-page-header">
-                <a class="back-btn" href="#/" title="Indietro">&larr; Indietro</a>
-                <h2>Impostazioni</h2>
+    <div class="header-spacer"></div>
+
+    <button class="icon-btn" @click="toggleTheme()" :title="theme === 'dark' ? 'Tema chiaro' : 'Tema scuro'" :aria-label="theme === 'dark' ? 'Tema chiaro' : 'Tema scuro'">
+        <svg class="icon" x-show="theme === 'dark'"><use href="/static/icons.svg#sun"/></svg>
+        <svg class="icon" x-show="theme === 'light'"><use href="/static/icons.svg#moon"/></svg>
+    </button>
+    <button class="icon-btn" @click="openSettings()" title="Impostazioni" aria-label="Impostazioni">
+        <svg class="icon"><use href="/static/icons.svg#settings"/></svg>
+    </button>
+</header>
+
+<!-- ============================ TOASTS ============================ -->
+<div class="toast-stack" aria-live="polite" aria-atomic="false">
+    <template x-for="t in toasts.items" :key="t.id">
+        <div class="toast" :class="t.type" @click="toasts.dismiss(t.id)">
+            <svg class="icon icon-sm">
+                <use :href="'/static/icons.svg#' + (t.type === 'error' ? 'x' : t.type === 'warning' ? 'info' : 'check')"/>
+            </svg>
+            <span class="toast-msg" x-text="t.msg"></span>
+        </div>
+    </template>
+</div>
+
+<!-- ============================ MAIN ============================== -->
+<main class="app-main">
+<div class="layout">
+
+    <!-- =============== COL LEFT — HISTORY =============== -->
+    <section class="col col-history" data-mobile-hidden :data-active="activeTab === 'history' || null">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#history"/></svg>
+                    Cronologia
+                </h2>
+                <button x-show="history.total > 0" class="card-action danger" @click="clearHistory()">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#trash"/></svg>
+                    Pulisci
+                </button>
             </div>
-            <div class="card settings-section">
-                <h3>Spotify</h3>
-                <div class="auth-row">
-                    <span class="dot" id="settingsSpotifyDot"></span>
-                    <span id="settingsSpotifyLabel">Verifica in corso...</span>
+            <ul class="list list-scroll">
+                <template x-if="history.items.length === 0">
+                    <li class="empty">Nessuna traccia</li>
+                </template>
+                <template x-for="(e, i) in history.items" :key="(history.offset + i) + ':' + e.played_at">
+                    <li>
+                        <span class="source-tag" :class="'source-' + sourceClass(e.track.type)" x-text="sourceLabel(e.track.type)"></span>
+                        <div class="name">
+                            <strong x-text="e.track.title" :title="e.track.title"></strong>
+                            <small :title="formatPlayedAt(e.played_at)" x-text="formatRelativeTime(e.played_at)"></small>
+                        </div>
+                        <div class="actions">
+                            <button class="add" @click="requeueFromHistory(history.offset + i)" title="Aggiungi alla coda" aria-label="Aggiungi alla coda">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#plus"/></svg>
+                            </button>
+                            <button class="danger" @click="removeHistoryEntry(history.offset + i)" title="Rimuovi" aria-label="Rimuovi">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#x"/></svg>
+                            </button>
+                        </div>
+                    </li>
+                </template>
+            </ul>
+            <div class="pagination" x-show="history.totalPages > 1">
+                <button class="btn btn-ghost btn-sm btn-icon" :disabled="history.offset === 0" @click="historyPrev()" aria-label="Pagina precedente">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#chevron-left"/></svg>
+                </button>
+                <span class="page-info" x-text="`${history.currentPage} / ${history.totalPages} (${history.total})`"></span>
+                <button class="btn btn-ghost btn-sm btn-icon" :disabled="history.offset + history.limit >= history.total" @click="historyNext()" aria-label="Pagina successiva">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#chevron-right"/></svg>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- =============== COL CENTER — PLAYER + ADD =============== -->
+    <section class="col col-center" data-mobile-hidden :data-active="activeTab === 'player' || activeTab === 'search' || null">
+
+        <!-- NOW PLAYING -->
+        <div class="card now-playing" :data-mobile-only="activeTab === 'player' || null" x-show="activeTab !== 'search' || isDesktop">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#music"/></svg>
+                    Now Playing
+                </h2>
+            </div>
+            <div class="np-body">
+                <div class="np-cover">
+                    <template x-if="player.track && player.track.cover_url">
+                        <img :src="player.track.cover_url" :alt="player.track.title" loading="lazy" @error="$event.target.style.display='none'">
+                    </template>
+                    <template x-if="!player.track || !player.track.cover_url">
+                        <svg class="icon icon-lg"><use href="/static/icons.svg#music"/></svg>
+                    </template>
+                    <template x-if="player.track">
+                        <span class="np-source-badge" x-text="sourceLabel(player.track.type)"></span>
+                    </template>
                 </div>
-                <div id="spotifyLoginArea">
-                    <button class="btn-primary" id="spotifyLoginBtn" onclick="startSpotifyZeroconf()">
+                <div class="np-info">
+                    <div class="np-meta">
+                        <div class="np-title" :title="player.track ? player.track.title : ''" x-text="player.track ? player.track.title : 'Nessuna traccia'"></div>
+                        <div class="np-artist" :title="player.track ? formatArtist(player.track) : ''" x-text="player.track ? formatArtist(player.track) : ''"></div>
+                    </div>
+                    <div class="np-progress">
+                        <div class="np-progress-bar"
+                             @mousedown="startScrub($event)"
+                             @click="seekFromEvent($event)">
+                            <div class="np-progress-fill" :style="`width: ${player.duration > 0 ? (player.position / player.duration * 100) : 0}%`"></div>
+                        </div>
+                        <span class="np-time-inline mono">
+                            <span x-text="formatTime(player.position)"></span><span class="muted">/</span><span x-text="formatTime(player.duration)"></span>
+                        </span>
+                    </div>
+                </div>
+                <div class="np-controls">
+                    <button class="ctrl-btn" :aria-pressed="player.shuffle" @click="toggleShuffle()" title="Shuffle" aria-label="Shuffle">
+                        <svg class="icon"><use href="/static/icons.svg#shuffle"/></svg>
+                    </button>
+                    <button class="ctrl-btn" @click="post('/player/previous')" title="Precedente" aria-label="Precedente">
+                        <svg class="icon"><use href="/static/icons.svg#skip-back"/></svg>
+                    </button>
+                    <button class="ctrl-btn primary" @click="togglePlayPause()" :title="player.isPlaying ? 'Pausa' : 'Play'" :aria-label="player.isPlaying ? 'Pausa' : 'Play'">
+                        <svg class="icon" x-show="!player.isPlaying"><use href="/static/icons.svg#play"/></svg>
+                        <svg class="icon" x-show="player.isPlaying"><use href="/static/icons.svg#pause"/></svg>
+                    </button>
+                    <button class="ctrl-btn" @click="post('/player/skip')" title="Salta" aria-label="Salta">
+                        <svg class="icon"><use href="/static/icons.svg#skip-forward"/></svg>
+                    </button>
+                    <button class="ctrl-btn" :aria-pressed="player.repeat !== 'off'" @click="cycleRepeat()" :title="`Repeat: ${player.repeat}`" aria-label="Repeat">
+                        <svg class="icon" x-show="player.repeat !== 'one'"><use href="/static/icons.svg#repeat"/></svg>
+                        <svg class="icon" x-show="player.repeat === 'one'"><use href="/static/icons.svg#repeat-1"/></svg>
+                    </button>
+                </div>
+                <div class="np-volume">
+                    <button class="ctrl-btn" @click="toggleMute()" :title="muted ? 'Riattiva audio' : 'Muto'" :aria-label="muted ? 'Riattiva audio' : 'Muto'">
+                        <svg class="icon icon-sm" :style="muted ? 'opacity:.4' : ''"><use href="/static/icons.svg#volume"/></svg>
+                    </button>
+                    <input type="range" min="0" max="100" :value="player.volume" @input="setVolume($event.target.value)" aria-label="Volume">
+                    <span class="vol-label" x-text="player.volume"></span>
+                    <button class="ctrl-btn" :aria-pressed="player.normalize" data-mode="signal" @click="toggleNormalize()" title="Auto-livellamento" aria-label="Auto-livellamento">
+                        <svg class="icon icon-sm"><use href="/static/icons.svg#activity"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Preview prossime tracce (solo mobile, sezione Player) -->
+            <div x-show="isMobile && activeTab === 'player' && queue.length > 0" class="queue-preview">
+                <div class="queue-preview-header">
+                    <span>Prossime</span>
+                    <button class="card-action" @click="activeTab = 'queue'">
+                        Tutta la coda
+                        <svg class="icon icon-sm"><use href="/static/icons.svg#chevron-right"/></svg>
+                    </button>
+                </div>
+                <ul class="list">
+                    <template x-for="(t, i) in queue.slice(0, 3)" :key="'qp:' + t.id">
+                        <li>
+                            <span class="source-tag" :class="'source-' + sourceClass(t.type)" x-text="sourceLabel(t.type)"></span>
+                            <div class="name">
+                                <strong x-text="t.title"></strong>
+                                <template x-if="t.artist"><small x-text="t.artist"></small></template>
+                            </div>
+                            <span class="eta" x-text="'~' + etaForIndex(i)"></span>
+                        </li>
+                    </template>
+                </ul>
+            </div>
+        </div>
+
+        <!-- AGGIUNGI: Cerca / Sfoglia / URL -->
+        <div class="card" x-show="activeTab === 'search' || isDesktop || isTablet">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#plus"/></svg>
+                    Aggiungi
+                </h2>
+            </div>
+            <div class="tab-pill">
+                <button :class="{active: addMode === 'search'}" @click="addMode = 'search'">
+                    <svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="/static/icons.svg#search"/></svg>
+                    Cerca
+                </button>
+                <button :class="{active: addMode === 'browse'}" @click="addMode = 'browse'; refreshMedia()">
+                    <svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="/static/icons.svg#folder"/></svg>
+                    Sfoglia
+                </button>
+                <button :class="{active: addMode === 'url'}" @click="addMode = 'url'">
+                    <svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="/static/icons.svg#plus"/></svg>
+                    URL
+                </button>
+                <button :class="{active: addMode === 'playlist'}" @click="addMode = 'playlist'; refreshPlaylists()">
+                    <svg class="icon icon-sm" style="vertical-align:-3px;margin-right:4px"><use href="/static/icons.svg#list-music"/></svg>
+                    Playlist
+                </button>
+            </div>
+
+            <!-- MODE: SEARCH -->
+            <div x-show="addMode === 'search'" class="flex-col">
+                <div class="input-row">
+                    <div class="input-icon" style="flex:1">
+                        <svg class="icon"><use href="/static/icons.svg#search"/></svg>
+                        <input type="search" x-model="search.unifiedQuery" @keydown.enter="unifiedSearch()" placeholder="Cerca su tutte le sorgenti...">
+                    </div>
+                    <button class="btn btn-primary" @click="unifiedSearch()">Cerca</button>
+                </div>
+
+                <div x-show="search.unifiedLoading" class="flex-col">
+                    <div class="skeleton"></div>
+                    <div class="skeleton"></div>
+                    <div class="skeleton"></div>
+                </div>
+
+                <template x-if="!search.unifiedLoading && search.unifiedTabs.length > 0">
+                    <div>
+                        <div class="tab-pill" style="background:transparent; border:0; padding:0; margin-bottom: var(--sp-2)">
+                            <template x-for="tab in search.unifiedTabs" :key="tab.key">
+                                <button :class="{active: search.unifiedActiveTab === tab.key}" @click="search.unifiedActiveTab = tab.key">
+                                    <span x-text="tab.label"></span>
+                                    <span style="opacity:.5;margin-left:4px" x-text="`(${tab.items.length})`"></span>
+                                </button>
+                            </template>
+                        </div>
+                        <ul class="list list-scroll">
+                            <template x-for="item in currentSearchItems" :key="item._key">
+                                <li>
+                                    <span class="source-tag" :class="'source-' + sourceClass(search.unifiedActiveTab)" x-text="sourceLabel(search.unifiedActiveTab)"></span>
+                                    <div class="name">
+                                        <strong x-text="item.title" :title="item.title"></strong>
+                                        <small x-text="formatSearchSubtitle(item, search.unifiedActiveTab)"></small>
+                                    </div>
+                                    <span class="duration" x-text="fmtDuration(item.duration_ms)"></span>
+                                    <div class="actions">
+                                        <button class="add" @click="addUnifiedItem(item, search.unifiedActiveTab)" aria-label="Aggiungi">
+                                            <svg class="icon icon-sm"><use href="/static/icons.svg#plus"/></svg>
+                                        </button>
+                                    </div>
+                                </li>
+                            </template>
+                        </ul>
+                        <div class="load-more" x-show="unifiedHasMore">
+                            <button class="btn btn-secondary btn-sm"
+                                    :disabled="search.unifiedLoadingMore"
+                                    @click="loadMoreUnified()">
+                                <template x-if="search.unifiedLoadingMore">
+                                    <span class="spinner-inline" style="border-color: currentColor; border-top-color: transparent"></span>
+                                </template>
+                                <span x-text="search.unifiedLoadingMore ? 'Caricamento...' : `Carica altri (${currentSearchItems.length} mostrati)`"></span>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+
+                <div class="search-empty" x-show="!search.unifiedLoading && search.unifiedSearched && search.unifiedTabs.length === 0">
+                    Nessun risultato trovato
+                </div>
+            </div>
+
+            <!-- MODE: BROWSE (file locali) -->
+            <div x-show="addMode === 'browse'" class="flex-col">
+                <div class="media-breadcrumb">
+                    <span class="crumb" @click="navigateMedia('')">media</span>
+                    <template x-for="(part, i) in mediaCrumbs" :key="i">
+                        <span style="display:contents">
+                            <span class="sep">/</span>
+                            <template x-if="i < mediaCrumbs.length - 1">
+                                <span class="crumb" @click="navigateMedia(part.path)" x-text="part.name"></span>
+                            </template>
+                            <template x-if="i === mediaCrumbs.length - 1">
+                                <span class="current" x-text="part.name"></span>
+                            </template>
+                        </span>
+                    </template>
+                </div>
+                <ul class="list list-scroll media-list">
+                    <template x-if="media.items.length === 0">
+                        <li class="empty">Cartella vuota</li>
+                    </template>
+                    <template x-if="media.parent !== null">
+                        <li class="dir" @click="navigateMedia(media.parent)">
+                            <svg class="icon icon-sm muted"><use href="/static/icons.svg#chevron-left"/></svg>
+                            <div class="name"><strong>..</strong></div>
+                        </li>
+                    </template>
+                    <template x-for="d in media.dirs" :key="'d:' + d.path">
+                        <li class="dir" @click="navigateMedia(d.path)">
+                            <svg class="icon icon-sm" style="color: var(--accent)"><use href="/static/icons.svg#folder"/></svg>
+                            <div class="name"><strong x-text="d.name"></strong></div>
+                        </li>
+                    </template>
+                    <template x-for="f in media.files" :key="'f:' + f.path">
+                        <li>
+                            <svg class="icon icon-sm muted"><use href="/static/icons.svg#music"/></svg>
+                            <div class="name"><strong x-text="f.name" :title="f.name"></strong></div>
+                            <div class="actions">
+                                <button class="add" @click="addMediaToQueue(f.path)" aria-label="Aggiungi">
+                                    <svg class="icon icon-sm"><use href="/static/icons.svg#plus"/></svg>
+                                </button>
+                            </div>
+                        </li>
+                    </template>
+                </ul>
+                <div class="upload-form">
+                    <input type="file" id="fileUpload" accept="audio/*,video/*">
+                    <button class="btn" @click="uploadFile()">
+                        <svg class="icon icon-sm"><use href="/static/icons.svg#upload"/></svg>
+                        Carica
+                    </button>
+                </div>
+            </div>
+
+            <!-- MODE: URL diretto -->
+            <div x-show="addMode === 'url'" class="flex-col">
+                <div class="input-row">
+                    <div class="input-icon" style="flex:1">
+                        <svg class="icon"><use href="/static/icons.svg#plus"/></svg>
+                        <input type="text" x-model="addUrlInput" @keydown.enter="addDirectUrl()" placeholder="https://youtube.com/...  oppure  https://soundcloud.com/...">
+                    </div>
+                    <button class="btn btn-primary" @click="addDirectUrl()">Aggiungi</button>
+                </div>
+                <div class="hint">
+                    Incolla un URL YouTube o SoundCloud. Il tipo viene riconosciuto automaticamente.
+                </div>
+            </div>
+
+            <!-- MODE: PLAYLIST salvate -->
+            <div x-show="addMode === 'playlist'" class="flex-col">
+                <ul class="list list-scroll">
+                    <template x-if="playlists.length === 0">
+                        <li class="empty">Nessuna playlist salvata. Usa il bottone "Salva" nella Scaletta per crearne una.</li>
+                    </template>
+                    <template x-for="p in playlists" :key="'pl:' + p.name">
+                        <li>
+                            <svg class="icon icon-sm muted"><use href="/static/icons.svg#list-music"/></svg>
+                            <div class="name">
+                                <strong x-text="p.name" :title="p.name"></strong>
+                                <small x-text="p.track_count + ' brani'"></small>
+                            </div>
+                            <div class="actions">
+                                <button @click="loadPlaylist(p.name, false)" title="Accoda" aria-label="Accoda">
+                                    <svg class="icon icon-sm"><use href="/static/icons.svg#plus"/></svg>
+                                </button>
+                                <button class="add" @click="loadPlaylist(p.name, true)" title="Sostituisci coda" aria-label="Sostituisci coda">
+                                    <svg class="icon icon-sm"><use href="/static/icons.svg#play"/></svg>
+                                </button>
+                                <button class="danger" @click="deletePlaylist(p.name)" aria-label="Elimina">
+                                    <svg class="icon icon-sm"><use href="/static/icons.svg#trash"/></svg>
+                                </button>
+                            </div>
+                        </li>
+                    </template>
+                </ul>
+            </div>
+        </div>
+
+    </section>
+
+    <!-- =============== COL RIGHT — QUEUE =============== -->
+    <section class="col col-right" data-mobile-hidden :data-active="activeTab === 'queue' || null">
+        <div class="card">
+            <div class="card-header">
+                <h2 class="card-title">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#list-music"/></svg>
+                    Scaletta
+                    <span class="badge" x-text="queue.length"></span>
+                </h2>
+                <button class="card-action" x-show="queue.length > 0" @click="promptSavePlaylist()" title="Salva la coda corrente come playlist">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#save"/></svg>
+                    Salva
+                </button>
+            </div>
+            <ul class="list list-scroll" id="queueList"
+                @dragover.prevent
+                @drop.prevent>
+                <template x-if="queue.length === 0">
+                    <li class="empty">La scaletta è vuota</li>
+                </template>
+                <template x-for="(t, i) in queue" :key="'q:' + t.id">
+                    <li :data-track-id="t.id" :data-index="i"
+                        draggable="true"
+                        @dragstart="onDragStart($event, t.id)"
+                        @dragend="onDragEnd($event)"
+                        @dragover.prevent="onDragOver($event)"
+                        @dragleave="$event.currentTarget.classList.remove('drag-over')"
+                        @drop.prevent.stop="onDrop($event, i)">
+                        <span class="gripper" aria-hidden="true">
+                            <svg class="icon icon-sm"><use href="/static/icons.svg#gripper"/></svg>
+                        </span>
+                        <span class="index mono" x-text="String(i + 1).padStart(2, '0')"></span>
+                        <span class="source-tag" :class="'source-' + sourceClass(t.type)" x-text="sourceLabel(t.type)"></span>
+                        <div class="name">
+                            <strong x-text="t.title" :title="t.title"></strong>
+                            <template x-if="t.artist"><small x-text="t.artist"></small></template>
+                        </div>
+                        <span class="eta" :title="'Suona tra ~' + etaForIndex(i)" x-text="'~' + etaForIndex(i)"></span>
+                        <div class="actions">
+                            <button x-show="i > 0" @click="moveTrack(t.id, i - 1)" aria-label="Sposta su">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#chevron-up"/></svg>
+                            </button>
+                            <button x-show="i < queue.length - 1" @click="moveTrack(t.id, i + 1)" aria-label="Sposta giù">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#chevron-down"/></svg>
+                            </button>
+                            <button class="danger" @click="removeTrack(t.id)" aria-label="Rimuovi">
+                                <svg class="icon icon-sm"><use href="/static/icons.svg#x"/></svg>
+                            </button>
+                        </div>
+                    </li>
+                </template>
+            </ul>
+        </div>
+    </section>
+
+</div>
+</main>
+
+<!-- ============================ TAB BAR (mobile) ============================ -->
+<nav class="tab-bar" role="navigation" aria-label="Sezioni">
+    <button :aria-selected="activeTab === 'player'" @click="activeTab = 'player'">
+        <svg class="icon"><use href="/static/icons.svg#music"/></svg>
+        Player
+    </button>
+    <button :aria-selected="activeTab === 'queue'" @click="activeTab = 'queue'">
+        <svg class="icon"><use href="/static/icons.svg#list-music"/></svg>
+        <span>Coda <span style="opacity:.6" x-text="queue.length ? `(${queue.length})` : ''"></span></span>
+    </button>
+    <button :aria-selected="activeTab === 'search'" @click="activeTab = 'search'">
+        <svg class="icon"><use href="/static/icons.svg#search"/></svg>
+        Cerca
+    </button>
+    <button :aria-selected="activeTab === 'history'" @click="activeTab = 'history'">
+        <svg class="icon"><use href="/static/icons.svg#history"/></svg>
+        Storia
+    </button>
+</nav>
+
+<!-- ============================ SETTINGS DIALOG ============================ -->
+<dialog id="settingsDialog" @click="$event.target === $el && closeSettings()">
+    <div class="dialog-header">
+        <h2>Impostazioni</h2>
+        <button class="icon-btn" @click="closeSettings()" aria-label="Chiudi">
+            <svg class="icon"><use href="/static/icons.svg#x"/></svg>
+        </button>
+    </div>
+    <div class="dialog-body">
+
+        <div class="dialog-section">
+            <h3>Tema</h3>
+            <div class="flex-row">
+                <button class="btn" :class="theme === 'dark' ? 'btn-primary' : ''" @click="setTheme('dark')">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#moon"/></svg> Scuro
+                </button>
+                <button class="btn" :class="theme === 'light' ? 'btn-primary' : ''" @click="setTheme('light')">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#sun"/></svg> Chiaro
+                </button>
+            </div>
+        </div>
+
+        <div class="dialog-section">
+            <h3>Spotify</h3>
+            <div class="auth-row">
+                <span class="status-dot" :class="{
+                    authenticated: spotify.ready,
+                    warming: spotify.warming,
+                    unauthenticated: !spotify.authed || spotify.failed
+                }" style="background: var(--text-muted);
+                          background: var(--text-muted) !important;
+                "></span>
+                <!-- inline status pill style for the dot -->
+                <span x-text="spotifyStatusLabel"></span>
+            </div>
+
+            <template x-if="!spotify.authed && !spotify.zeroconf?.running">
+                <div class="flex-col">
+                    <button class="btn btn-primary" @click="startSpotifyZeroconf()" :disabled="spotify.startingZeroconf">
                         Login Spotify Connect
                     </button>
-                    <div class="hint">Richiede un account Premium e che il telefono sia sulla stessa rete LAN del kiosk.</div>
-                </div>
-                <div class="instructions" id="spotifyInstructions" style="display:none">
-                    <div style="margin-bottom:8px;">
-                        <span class="spinner"></span>
-                        <strong>In attesa del login...</strong>
+                    <div class="hint">
+                        Richiede un account Spotify Premium e che il telefono sia sulla stessa rete LAN del kiosk.
                     </div>
-                    <ol>
-                        <li>Apri l'app Spotify sul telefono (account Premium)</li>
-                        <li>Tocca l'icona Dispositivi (in basso, vicino al brano)</li>
-                        <li>Seleziona <strong id="spotifyDeviceName">DiscoBot</strong></li>
-                    </ol>
-                    <button class="btn-secondary" onclick="stopSpotifyZeroconf()" style="margin-top:10px;">
-                        Annulla
-                    </button>
                 </div>
-                <div class="success-msg" id="spotifySuccess" style="display:none">
-                    &check; Login completato
-                </div>
-            </div>
-        </div>
-    </main>
+            </template>
 
-    <script src="/static/app.js"></script>
+            <template x-if="!spotify.authed && spotify.zeroconf?.running">
+                <div class="flex-col">
+                    <div class="flex-row" style="font-weight:500">
+                        <span class="spinner-inline"></span>
+                        <span>In attesa del login...</span>
+                    </div>
+                    <ol class="steps">
+                        <li>Apri l'app Spotify sul telefono (Premium)</li>
+                        <li>Tocca l'icona Dispositivi (in basso, vicino al brano)</li>
+                        <li>Seleziona <strong x-text="spotify.zeroconf?.device_name || 'DiscoBot'"></strong></li>
+                    </ol>
+                    <button class="btn btn-secondary btn-sm" @click="stopSpotifyZeroconf()">Annulla</button>
+                </div>
+            </template>
+
+            <template x-if="spotify.authed">
+                <div class="success-row">
+                    <svg class="icon icon-sm"><use href="/static/icons.svg#check"/></svg>
+                    Login completato
+                </div>
+            </template>
+        </div>
+    </div>
+</dialog>
+
+<!-- app.js DEVE precedere alpine: Alpine 3 si auto-inizializza all'esecuzione
+     del proprio bundle (non al DOMContentLoaded), quindi discoBot() deve
+     gia' essere definita quando Alpine fa lo scan delle direttive x-data. -->
+<script src="/static/app.js" defer></script>
+<script src="/static/vendor/alpinejs.min.js" defer></script>
 </body>
 </html>

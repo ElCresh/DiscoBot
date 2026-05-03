@@ -27,10 +27,14 @@ def get_client() -> spotipy.Spotify:
     return _client
 
 
-def search_tracks(query: str, limit: int = 10) -> list[dict]:
-    """Search Spotify for tracks. Returns list of result dicts."""
+def search_tracks(query: str, limit: int = 10, offset: int = 0) -> list[dict]:
+    """Search Spotify for tracks. Returns list of result dicts.
+
+    `offset` enables proper pagination via the Spotify Web API (max offset+limit
+    is 1000 per Spotify). Hard-cap limit to 50 (API max per request).
+    """
     sp = get_client()
-    results = sp.search(q=query, type="track", limit=limit)
+    results = sp.search(q=query, type="track", limit=min(limit, 50), offset=offset)
     tracks = []
     for item in results["tracks"]["items"]:
         artists = ", ".join(a["name"] for a in item["artists"])
