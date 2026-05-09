@@ -94,6 +94,7 @@ function discoBot() {
             public_enabled: false,
             public_require_approval: true,
             public_sources: { local: false, youtube: true, spotify: true, soundcloud: true },
+            public_controls: { transport: false, volume: false, modes: false },
             manager_auth_enabled: true,
         },
         pending: [],

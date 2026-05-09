@@ -664,6 +664,25 @@
                         </template>
                     </div>
                 </div>
+
+                <div :style="runtimeConfig.public_enabled ? '' : 'opacity:.5;pointer-events:none'">
+                    <div class="hint" style="margin-bottom: var(--sp-2);font-weight:500;color:var(--text-primary)">Controlli player concessi</div>
+                    <div class="hint" style="font-size:11px;margin-bottom:var(--sp-2)">
+                        Decidi quali pulsanti del player sono visibili e cliccabili dal pubblico. Cooldown 3s per cookie contro lo spam.
+                    </div>
+                    <div class="flex-row" style="flex-wrap: wrap; gap: var(--sp-2)">
+                        <template x-for="grp in [
+                            {key:'transport', label:'Transport (play/pause/skip)'},
+                            {key:'volume',    label:'Volume'},
+                            {key:'modes',     label:'Modes (shuffle/repeat)'}
+                        ]" :key="grp.key">
+                            <label class="btn btn-sm" :class="runtimeConfig.public_controls && runtimeConfig.public_controls[grp.key] ? 'btn-primary' : 'btn-secondary'" style="cursor:pointer">
+                                <input type="checkbox" :checked="runtimeConfig.public_controls && runtimeConfig.public_controls[grp.key]" @change="patchConfig({public_controls: {[grp.key]: $event.target.checked}})" style="display:none">
+                                <span x-text="grp.label"></span>
+                            </label>
+                        </template>
+                    </div>
+                </div>
             </section>
 
             <!-- ACCESSO REMOTO -->

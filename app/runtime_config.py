@@ -34,6 +34,15 @@ _DEFAULTS: dict[str, Any] = {
     # - public_enabled e tunnel_autostart sono FORZATI a False e non
     #   riattivabili (esporre il Manager senza auth = regalare il pannello)
     "manager_auth_enabled": True,
+    # Controlli player concessi al pubblico. Tutti default False:
+    # - transport: play/pause/skip/previous
+    # - volume:    set volume
+    # - modes:     shuffle / repeat
+    "public_controls": {
+        "transport": False,
+        "volume": False,
+        "modes": False,
+    },
 }
 
 
@@ -85,6 +94,7 @@ class RuntimeConfig:
                 "enabled": self._data["public_enabled"],
                 "require_approval": self._data["public_require_approval"],
                 "sources": dict(self._data["public_sources"]),
+                "controls": dict(self._data.get("public_controls", {})),
             }
 
     def patch(self, updates: dict[str, Any]) -> dict[str, Any]:
@@ -117,6 +127,13 @@ class RuntimeConfig:
                         if src_key not in self._data["public_sources"]:
                             raise KeyError(f"Unknown source: {src_key}")
                         self._data["public_sources"][src_key] = bool(enabled)
+                elif key == "public_controls":
+                    if not isinstance(value, dict):
+                        raise ValueError("public_controls must be a dict")
+                    for ctrl_key, enabled in value.items():
+                        if ctrl_key not in self._data["public_controls"]:
+                            raise KeyError(f"Unknown control group: {ctrl_key}")
+                        self._data["public_controls"][ctrl_key] = bool(enabled)
                 elif isinstance(self._data[key], bool):
                     self._data[key] = bool(value)
                 else:
@@ -163,6 +180,10 @@ class RuntimeConfig:
     def is_source_enabled_for_public(self, src: str) -> bool:
         with self._lock:
             return bool(self._data["public_sources"].get(src, False))
+
+    def is_control_group_enabled_for_public(self, group: str) -> bool:
+        with self._lock:
+            return bool(self._data.get("public_controls", {}).get(group, False))
 
 
 _singleton: RuntimeConfig | None = None

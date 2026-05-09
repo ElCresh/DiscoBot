@@ -32,6 +32,9 @@ PLAY_RETRY_DELAY_S = 1.0
 # Anti-abuso interfaccia pubblica
 PUBLIC_MAX_PENDING_PER_REQUESTER = 3
 PUBLIC_COOLDOWN_SECONDS = 15.0
+# Cooldown molto piu' breve per i controlli player diretti del pubblico:
+# previene spam (es. doppio-click skip) ma non rallenta l'uso normale.
+PUBLIC_CONTROL_COOLDOWN_S = 3.0
 # Watchdog: if a track set_media+play() doesn't reach Playing state within
 # this many seconds, treat it as stuck and trigger the retry policy. Streamed
 # sources (Spotify, YouTube) usually need a couple seconds to buffer; 15s is
@@ -149,6 +152,9 @@ class AudioPlayer:
         self._pending_counter = 0
         # Per-requester cooldown tracking for rate limiting.
         self._public_last_request: dict[str, float] = {}
+        # Cooldown separato per i comandi player diretti (transport / volume /
+        # modes). Piu' permissivo del cooldown sulle richieste alla coda.
+        self._public_control_last_request: dict[str, float] = {}
 
         PLAYLISTS_DIR.mkdir(exist_ok=True)
 
@@ -643,6 +649,25 @@ class AudioPlayer:
             self._check_public_rate(requester_id)
             self._public_last_request[requester_id] = time.monotonic()
         return self.add_track(track_request.path, track_request.type)
+
+    def check_public_control_rate(self, requester_id: str) -> None:
+        """Cooldown breve per i controlli player diretti.
+
+        Solleva ValueError con messaggio italiano se il cookie ha mandato
+        l'ultimo comando entro `PUBLIC_CONTROL_COOLDOWN_S` secondi. Va
+        chiamato PRIMA di eseguire il comando vero e proprio.
+        """
+        now = time.monotonic()
+        with self._lock:
+            last = self._public_control_last_request.get(requester_id)
+            if last is not None:
+                elapsed = now - last
+                if elapsed < PUBLIC_CONTROL_COOLDOWN_S:
+                    wait = int(PUBLIC_CONTROL_COOLDOWN_S - elapsed) + 1
+                    raise ValueError(
+                        f"Aspetta {wait} secondi prima del prossimo comando."
+                    )
+            self._public_control_last_request[requester_id] = now
 
     def get_pending(self) -> list[PendingTrack]:
         with self._lock:

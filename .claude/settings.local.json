@@ -67,7 +67,10 @@
       "Bash(kill -9 518002)",
       "Bash(DISCOBOT_SKIP_DEPCHECK=1 .venv/bin/python main.py --install-desktop)",
       "Read(//home/andrea/.local/share/applications/**)",
-      "Read(//home/andrea/.local/share/icons/**)"
+      "Read(//home/andrea/.local/share/icons/**)",
+      "Bash(pkill -9 -f \"uvicorn|port=18000\")",
+      "Bash(echo \"ready: $\\(curl -s -m 3 -o /dev/null -w \"%{http_code}\" http://127.0.0.1:18000/admin/config\\)\")",
+      "Bash(echo \"ready: $\\(curl -s -m 3 -o /dev/null -w \"%{http_code}\" http://127.0.0.1:18000/public/config\\)\")"
     ]
   }
 }

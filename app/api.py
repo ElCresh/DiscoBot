@@ -915,6 +915,9 @@ def public_state():
         "is_playing": s.is_playing,
         "position": s.position,
         "duration": s.duration,
+        "volume": s.volume,
+        "shuffle": s.shuffle,
+        "repeat": s.repeat.value if hasattr(s.repeat, "value") else s.repeat,
     }
 
 
@@ -981,6 +984,90 @@ async def public_queue_add(request: Request, response: Response):
 def public_my_pending(request: Request, response: Response):
     pid = _public_id(request, response)
     return {"items": [p.model_dump() for p in player.get_pending_for_requester(pid)]}
+
+
+# --- Public player controls ---
+
+def _public_control_check(
+    request: Request, response: Response, group: str
+) -> str:
+    """Verifica preconditions per un comando player pubblico.
+
+    Solleva HTTPException su:
+    - 503 interfaccia disabilitata
+    - 403 gruppo di controlli non concesso al pubblico
+    - 429 cooldown attivo
+
+    In caso di ok ritorna il public id del cookie (per logging/future use).
+    """
+    cfg = get_runtime_config()
+    if not cfg.public_enabled:
+        raise HTTPException(status_code=503, detail="Interfaccia pubblica disattivata")
+    if not cfg.is_control_group_enabled_for_public(group):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Controlli '{group}' non concessi al pubblico",
+        )
+    pid = _public_id(request, response)
+    try:
+        player.check_public_control_rate(pid)
+    except ValueError as e:
+        raise HTTPException(status_code=429, detail=str(e))
+    return pid
+
+
+@app.post("/public/player/play")
+def public_player_play(request: Request, response: Response):
+    _public_control_check(request, response, "transport")
+    player.play()
+    return {"status": "playing"}
+
+
+@app.post("/public/player/pause")
+def public_player_pause(request: Request, response: Response):
+    _public_control_check(request, response, "transport")
+    player.pause()
+    return {"status": "paused"}
+
+
+@app.post("/public/player/skip")
+def public_player_skip(request: Request, response: Response):
+    _public_control_check(request, response, "transport")
+    player.skip()
+    return {"status": "skipped"}
+
+
+@app.post("/public/player/previous")
+def public_player_previous(request: Request, response: Response):
+    _public_control_check(request, response, "transport")
+    player.previous()
+    return {"status": "previous"}
+
+
+@app.post("/public/player/volume")
+def public_player_volume(volume: int, request: Request, response: Response):
+    _public_control_check(request, response, "volume")
+    if volume < 0 or volume > 100:
+        raise HTTPException(status_code=400, detail="volume must be 0..100")
+    player.set_volume(volume)
+    return {"status": "ok", "volume": volume}
+
+
+@app.post("/public/player/shuffle")
+def public_player_shuffle(enabled: bool, request: Request, response: Response):
+    _public_control_check(request, response, "modes")
+    player.set_shuffle(enabled)
+    return {"status": "ok", "shuffle": enabled}
+
+
+@app.post("/public/player/repeat")
+def public_player_repeat(mode: str, request: Request, response: Response):
+    _public_control_check(request, response, "modes")
+    try:
+        player.set_repeat(RepeatMode(mode))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="mode must be off|one|all")
+    return {"status": "ok", "repeat": mode}
 
 
 # --- Web UI ---

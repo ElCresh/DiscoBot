@@ -5,10 +5,14 @@
 function discoBotPublic() {
     return {
         connected: false,
-        config: { enabled: false, require_approval: true, sources: {} },
-        player: { isPlaying: false, track: null, position: 0, duration: 0 },
+        config: { enabled: false, require_approval: true, sources: {}, controls: {} },
+        player: {
+            isPlaying: false, track: null, position: 0, duration: 0,
+            volume: 80, shuffle: false, repeat: 'off',
+        },
         queue: [],
         myPending: [],
+        controlBusy: false,
 
         // Toasts (stesso pattern del manager)
         toasts: {
@@ -93,6 +97,9 @@ function discoBotPublic() {
                 this.player.position = s.position;
                 this.player.duration = s.duration;
                 this.player.isPlaying = s.is_playing;
+                if (typeof s.volume === 'number') this.player.volume = s.volume;
+                if (typeof s.shuffle === 'boolean') this.player.shuffle = s.shuffle;
+                if (typeof s.repeat === 'string') this.player.repeat = s.repeat;
                 this.queue = s.queue || [];
                 this.connected = true;
             } catch (e) {
@@ -173,6 +180,48 @@ function discoBotPublic() {
                 });
             }
             return out;
+        },
+
+        // ---- Player controls (subset esposto dal Manager) ----
+        async _control(url) {
+            this.controlBusy = true;
+            try {
+                await this._api(url, { method: 'POST' });
+                // forza un fetch immediato per riflettere lo stato in UI
+                this._fetchState();
+            } catch (e) {
+                if (e.status === 429) {
+                    this.toasts.push('warning', e.message || 'Aspetta prima del prossimo comando');
+                } else if (e.status === 403 || e.status === 503) {
+                    this.toasts.push('error', e.message || 'Comando non disponibile');
+                } else {
+                    this.toasts.push('error', `Errore: ${e.message}`);
+                }
+            } finally {
+                this.controlBusy = false;
+            }
+        },
+
+        controlAction(action) {
+            // action: 'play' | 'pause' | 'skip' | 'previous'
+            this._control(`/public/player/${action}`);
+        },
+
+        setVolume(v) {
+            // Aggiornamento ottimistico del valore mostrato
+            this.player.volume = parseInt(v);
+            this._control(`/public/player/volume?volume=${parseInt(v)}`);
+        },
+
+        controlMode(group, value) {
+            // group: 'shuffle' (boolean) — repeat usa cycleRepeat()
+            this._control(`/public/player/${group}?enabled=${value}`);
+        },
+
+        cycleRepeat() {
+            const modes = ['off', 'one', 'all'];
+            const next = modes[(modes.indexOf(this.player.repeat) + 1) % modes.length];
+            this._control(`/public/player/repeat?mode=${next}`);
         },
 
         async requestItem(item, source) {

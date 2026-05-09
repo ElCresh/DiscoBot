@@ -95,6 +95,36 @@
                         </span>
                     </div>
                 </div>
+
+                <!-- CONTROLS: visibili solo per i gruppi concessi dal Manager -->
+                <div class="np-controls" x-show="config.controls && config.controls.transport">
+                    <button class="ctrl-btn" @click="controlAction('previous')" :disabled="controlBusy" title="Precedente" aria-label="Precedente">
+                        <svg class="icon"><use href="/static/icons.svg#skip-back"/></svg>
+                    </button>
+                    <button class="ctrl-btn primary" @click="controlAction(player.isPlaying ? 'pause' : 'play')" :disabled="controlBusy" :title="player.isPlaying ? 'Pausa' : 'Play'" :aria-label="player.isPlaying ? 'Pausa' : 'Play'">
+                        <svg class="icon" x-show="!player.isPlaying"><use href="/static/icons.svg#play"/></svg>
+                        <svg class="icon" x-show="player.isPlaying"><use href="/static/icons.svg#pause"/></svg>
+                    </button>
+                    <button class="ctrl-btn" @click="controlAction('skip')" :disabled="controlBusy" title="Salta" aria-label="Salta">
+                        <svg class="icon"><use href="/static/icons.svg#skip-forward"/></svg>
+                    </button>
+                </div>
+
+                <div class="np-volume" x-show="config.controls && config.controls.volume">
+                    <svg class="icon icon-sm muted"><use href="/static/icons.svg#volume"/></svg>
+                    <input type="range" min="0" max="100" :value="player.volume" @change="setVolume($event.target.value)" :disabled="controlBusy" aria-label="Volume">
+                    <span class="vol-label" x-text="player.volume"></span>
+                </div>
+
+                <div class="np-controls" x-show="config.controls && config.controls.modes">
+                    <button class="ctrl-btn" :aria-pressed="player.shuffle" @click="controlMode('shuffle', !player.shuffle)" :disabled="controlBusy" title="Shuffle" aria-label="Shuffle">
+                        <svg class="icon"><use href="/static/icons.svg#shuffle"/></svg>
+                    </button>
+                    <button class="ctrl-btn" :aria-pressed="player.repeat !== 'off'" @click="cycleRepeat()" :disabled="controlBusy" :title="`Repeat: ${player.repeat}`" aria-label="Repeat">
+                        <svg class="icon" x-show="player.repeat !== 'one'"><use href="/static/icons.svg#repeat"/></svg>
+                        <svg class="icon" x-show="player.repeat === 'one'"><use href="/static/icons.svg#repeat-1"/></svg>
+                    </button>
+                </div>
             </div>
         </div>
 
